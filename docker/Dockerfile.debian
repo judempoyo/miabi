@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1
+#
+# Debian-based, rootless variant of the Miabi image. Same two-part build as the
+# Alpine Dockerfile (web UI static export embedded into a static Go binary that
+# serves both the API and the UI), but on a debian:bookworm-slim runtime and
+# running as an unprivileged user instead of root.
+
+FROM node:24-bookworm-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+# API is same-origin behind the reverse proxy.
+ENV VITE_API_URL=/api/v1
+RUN npm run build
+
+FROM golang:1.26.3 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Stage the built UI where the embed directive (internal/web) picks it up, so the
+# binary is self-contained.
+COPY --from=web /web/dist ./internal/web/dist
+ARG VERSION=dev
+ARG COMMIT=unknown
+# CGO disabled → a static binary that runs on the slim Debian runtime as-is.
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-s -w -X github.com/miabi-io/miabi/internal/config.Version=${VERSION} -X github.com/miabi-io/miabi/internal/config.CommitID=${COMMIT}" \
+    -o /out/miabi ./cmd/miabi
+
+FROM debian:bookworm-slim
+# Re-declare build args in this stage so they are in scope for the labels below.
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="Miabi (rootless)" \
+      org.opencontainers.image.description="The open-source, self-hosted Platform-as-a-Service (PaaS) for Docker — API + web UI in a single binary, running as an unprivileged user on Debian." \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.authors="Jonas Kaninda" \
+      org.opencontainers.image.vendor="miabi-io" \
+      org.opencontainers.image.url="https://github.com/miabi-io/miabi" \
+      org.opencontainers.image.source="https://github.com/miabi-io/miabi" \
+      org.opencontainers.image.documentation="https://github.com/miabi-io/miabi#readme" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 miabi \
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/miabi --shell /usr/sbin/nologin miabi \
+    && mkdir -p /var/lib/miabi/logs \
+    && mkdir -p /etc/goma/providers \
+    && chown -R miabi:miabi /var/lib/miabi \
+    && chown -R miabi:miabi /etc/goma/providers
+COPY --from=build /out/miabi /usr/local/bin/miabi
+ENV MIABI_LOG_DIR=/var/lib/miabi/logs
+# Run unprivileged. The server listens on a high port (9000), so binding it
+# needs no root; Docker-daemon access is granted at runtime by mounting the
+# socket and matching its group (e.g. `--group-add <docker gid>`), not by
+# running the process as root.
+USER miabi
+EXPOSE 9000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -q -O - http://127.0.0.1:9000/healthz >/dev/null 2>&1 || exit 1
+ENTRYPOINT ["/usr/local/bin/miabi"]
+CMD ["server"]

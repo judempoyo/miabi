@@ -1,0 +1,175 @@
+# Miabi with Traefik — example single-node stack WITHOUT Goma Gateway.
+#
+# Same layout as compose.yaml, but swaps the Goma gateway for Traefik as the
+# edge proxy. Traefik terminates TLS (ACME/Let's Encrypt) and routes by reading
+# Docker labels off containers on the shared `miabi` network.
+#
+# Quick start:
+#   cp .env.example .env         # then edit: domains + secrets (openssl rand -hex 32)
+#   echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> .env
+#   docker compose -f compose.traefik.yaml up -d
+#
+# DNS: point your panel domain at this host. (One-click wildcard app URLs need
+# Goma — on Traefik you expose each app via labels; see note 1 below.)
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Trade-offs vs. the default Goma stack (compose.yaml) — read before choosing:
+#
+# 1. App routes use Traefik labels you add MANUALLY. Miabi does NOT generate
+#    `traefik.*` labels — its Domain/Route management, one-click wildcard URLs,
+#    and managed (DNS-01) wildcard certs are Goma features and are inert here.
+#    Expose an app in the panel: App → Settings → Container labels, e.g. for a
+#    container on port 8080:
+#        traefik.enable                                       = true
+#        traefik.http.routers.<app>.rule                      = Host(`blog.example.com`)
+#        traefik.http.routers.<app>.entrypoints               = websecure
+#        traefik.http.routers.<app>.tls.certresolver          = le
+#        traefik.http.services.<app>.loadbalancer.server.port = 8080
+#
+# 2. Rolling & canary deploys REQUIRE Goma (they reweight the proxy backends).
+#    On Traefik use the "Recreate" strategy for every app (brief downtime).
+#
+# 3. The built-in container registry REQUIRES Goma (its auth runs via Goma's
+#    forwardAuth). Keep MIABI_REGISTRY_ENABLED=false here and use an external
+#    registry (Docker Hub, GHCR, …) for git-source builds instead.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  miabi-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MIABI_DB_USER:-miabi}
+      POSTGRES_PASSWORD: ${MIABI_DB_PASSWORD:?set MIABI_DB_PASSWORD}
+      POSTGRES_DB: ${MIABI_DB_NAME:-miabi}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [miabi]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MIABI_DB_USER:-miabi}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  miabi-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${MIABI_REDIS_PASSWORD:?set MIABI_REDIS_PASSWORD}"]
+    volumes:
+      - redisdata:/data
+    networks: [miabi]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${MIABI_REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Edge proxy: terminates TLS (ACME/Let's Encrypt) and routes by Docker labels.
+  # Only containers with traefik.enable=true are exposed, reached over `miabi`.
+  traefik:
+    image: traefik:v3.3
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=miabi"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.le.acme.email=${MIABI_ACME_EMAIL:-admin@example.com}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge=true"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+    depends_on:
+      miabi-redis: { condition: service_healthy }
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Read-only socket for label discovery. Harden with a docker-socket-proxy
+      # in front instead of mounting the socket directly.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-certs:/letsencrypt
+    networks: [miabi]
+
+  # Control plane: single binary serving the API + web UI, with the background
+  # worker embedded by default (see the optional `miabi-worker` below).
+  miabi:
+    image: ${MIABI_IMAGE:-miabi/miabi:latest}
+    restart: unless-stopped
+    # Runs as root by default. To run unprivileged, uncomment `user` below — the
+    # image ships a miabi account (uid/gid 10001) and its data dirs are owned by
+    # it, so named volumes just work. group_add still grants Docker socket access
+    # either way:
+    #   echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> .env
+    # user: "10001:10001"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    depends_on:
+      miabi-postgres: { condition: service_healthy }
+      miabi-redis: { condition: service_healthy }
+    # Pass the whole .env into the container so the feature toggles flow through
+    # without listing each here.
+    env_file:
+      - .env
+    environment:
+      MIABI_ENV: production
+      MIABI_PORT: "9000"
+      MIABI_DB_HOST: miabi-postgres
+      MIABI_REDIS_ADDR: miabi-redis:6379
+      # Shared network Traefik + managed app containers join (also Miabi's
+      # EnsureNetwork default). Traefik can only route to apps on this network.
+      MIABI_PROXY_NETWORK: miabi
+      # NOTE: no MIABI_GOMA_PROVIDER_DIR — this stack has no Goma. Traefik owns
+      # routing + TLS via the labels you add per app (see the header).
+      MIABI_WEB_URL: ${MIABI_WEB_URL:?set MIABI_WEB_URL, e.g. https://miabi.example.com}
+      MIABI_CONTROL_URL: ${MIABI_WEB_URL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Externalized log store — keep on a volume so logs survive restarts, and
+      # share the SAME volume with the optional worker below.
+      - miabi-logs:/var/lib/miabi/logs
+      - /proc:/host/proc:ro
+    # Traefik routes the panel domain to Miabi (port 9000). This is the one place
+    # Miabi itself carries traefik.* labels; your apps get theirs via the panel.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.miabi.rule=Host(`${MIABI_DOMAIN:?set MIABI_DOMAIN}`)"
+      - "traefik.http.routers.miabi.entrypoints=websecure"
+      - "traefik.http.routers.miabi.tls.certresolver=le"
+      - "traefik.http.services.miabi.loadbalancer.server.port=9000"
+    networks: [miabi]
+
+  # OPTIONAL — scale the background worker out of the panel process. It MUST
+  # mount the same miabi-logs volume so the panel can read what it externalizes.
+  # Uncomment to enable.
+  # miabi-worker:
+  #   image: ${MIABI_IMAGE:-miabi/miabi:latest}
+  #   command: ["worker"]
+  #   restart: unless-stopped
+  #   group_add: ["${DOCKER_GID:-999}"]
+  #   depends_on:
+  #     miabi-postgres: { condition: service_healthy }
+  #     miabi-redis: { condition: service_healthy }
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     MIABI_ENV: production
+  #     MIABI_DB_HOST: miabi-postgres
+  #     MIABI_REDIS_ADDR: miabi-redis:6379
+  #     MIABI_PROXY_NETWORK: miabi
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - miabi-logs:/var/lib/miabi/logs
+  #   networks: [miabi]
+
+volumes:
+  pgdata:
+  redisdata:
+  traefik-certs:
+  miabi-logs:
+
+networks:
+  miabi:
+    name: miabi

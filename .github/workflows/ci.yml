@@ -1,0 +1,95 @@
+name: CI
+
+# Runs on every push to the mainline branches and on all pull requests. Tag
+# pushes are handled by release.yml (which builds images + the GitHub release),
+# so they are excluded here to avoid duplicate runs.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (CE + EE)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # golangci-lint v2 config (.golangci.yml). We lint both build tag sets:
+      # the Community build and the Enterprise build (-tags enterprise), so
+      # enterprise-only files are covered too.
+      - name: Lint Community Edition
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+
+      - name: Lint Enterprise Edition
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          args: --build-tags enterprise
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      # - name: govulncheck
+      #   run: |
+      #     go install golang.org/x/vuln/cmd/govulncheck@latest
+      #     govulncheck ./...
+
+      - name: Test Community Edition
+        run: go test -race ./...
+
+      - name: Test Enterprise Edition
+        run: go test -race -tags enterprise ./...
+
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix web ci
+
+      # `npm run build` runs vue-tsc (typecheck) then vite build, so this
+      # catches type errors as well as build breakage.
+      - name: Typecheck and build
+        run: npm --prefix web run build
+
+  goreleaser-check:
+    name: GoReleaser config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check

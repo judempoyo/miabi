@@ -1,0 +1,102 @@
+# GoReleaser builds the downloadable binaries and publishes a GitHub Release on
+# every `v*` tag (see .github/workflows/release.yml). Like the image, these are
+# built with `-tags enterprise` and a baked LICENSE_PUBLIC_KEY: one edition that
+# runs as free Community until a license is installed. The Docker image is built
+# separately in that same workflow.
+#
+# The web UI is embedded into the binary (internal/web) at build time, so each
+# archive is just the self-contained executable — one file serves the API and the
+# UI. Validate locally with `goreleaser check`.
+version: 2
+
+project_name: miabi
+
+before:
+  hooks:
+    - go mod download
+    # Build the Vue UI and stage it where `go build` embeds it (internal/web).
+    - npm --prefix web ci
+    - npm --prefix web run build
+    - rm -rf internal/web/dist
+    - cp -r web/dist internal/web/dist
+
+builds:
+  - id: miabi
+    main: ./cmd/miabi
+    binary: miabi
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # Enterprise-capable build: the enterprise code is compiled in but stays
+    # dormant (runs as Community) until a valid license is installed.
+    tags:
+      - enterprise
+    ldflags:
+      - -s -w
+      - -X github.com/miabi-io/miabi/internal/config.Version={{ .Version }}
+      - -X github.com/miabi-io/miabi/internal/config.CommitID={{ .ShortCommit }}
+      # Baked license-signing key; empty is a harmless no-op (stays Community).
+      - -X github.com/miabi-io/miabi/internal/enterprise.embeddedPublicKey={{ .Env.LICENSE_PUBLIC_KEY }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: miabi
+    ids:
+      - miabi
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "^ci:"
+      - "Merge pull request"
+      - "Merge branch"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: miabi-io
+    name: miabi
+  draft: false
+  prerelease: auto
+  name_template: "Miabi {{ .Tag }}"
+  footer: |
+    ---
+
+    ## Docker images
+
+    Container images for this release are published to Docker Hub (`miabi/miabi`)
+    and GHCR (`ghcr.io/miabi-io/miabi`), tagged `latest`, `{{ .Tag }}`, and the
+    `-rootless` variants of each.
+
+    The web UI is embedded in the binary — each archive is a single self-contained
+    executable that serves both the API and the UI. No extra files to deploy.

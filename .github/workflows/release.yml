@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+# Versions of the two images Miabi ships alongside itself. The literal here is
+# the default and the reviewable record of what this release was tested against;
+# a repository (or environment) variable of the same name overrides it without a
+# code change — useful to re-cut a release against a patched dependency.
+#
+#   gh variable set GOMA_VERSION --body v0.12.0
+#
+# `||` falls back when the variable is unset OR set to the empty string.
+env:
+  # The Goma Gateway release this Miabi release is tested against. Prefer bumping
+  # the default in a PR (with a test run) over tracking Goma's `latest` —
+  # otherwise every Goma release silently reaches Miabi users on Goma's schedule,
+  # not ours.
+  GOMA_VERSION: ${{ vars.GOMA_VERSION || 'v0.11.0' }}
+  # miabi/runner versions independently of the panel (0.0.x vs 1.0.x), so it
+  # cannot inherit ${GITHUB_REF_NAME}: miabi/runner:1.0.0-beta.4 does not exist.
+  RUNNER_VERSION: ${{ vars.RUNNER_VERSION || 'v0.0.7' }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # full history so the changelog can diff against prior tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Baked into the downloadable binaries so a license can unlock
+          # Enterprise features. Empty is a harmless no-op — the binary still
+          # runs as free Community until a valid license is installed.
+          LICENSE_PUBLIC_KEY: ${{ vars.LICENSE_PUBLIC_KEY }}
+
+  # One edition. Built with `-tags enterprise`, the image runs as free Community
+  # until a license is installed, so the frictionless path is: pull `latest`, add
+  # a license later, and features unlock with no re-pull or redeploy. Tags are
+  # unsuffixed — there is no `-ce`/`-ee` split.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set version
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # The Miabi image (API + web UI in one binary) is published to Docker Hub
+      # (primary, matches the platform default miabi/miabi) and mirrored to GHCR.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Default runtime (Alpine, root).
+      - name: Build and push Miabi
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ env.COMMIT }}
+            GO_TAGS=enterprise
+            LICENSE_PUBLIC_KEY=${{ vars.LICENSE_PUBLIC_KEY }}
+          tags: |
+            miabi/miabi:latest
+            miabi/miabi:${{ env.VERSION }}
+            ghcr.io/miabi-io/miabi:latest
+            ghcr.io/miabi-io/miabi:${{ env.VERSION }}
+
+      # Rootless variant: same binary + web UI on a Debian runtime that runs as an
+      # unprivileged user (docker/Dockerfile.debian).
+      - name: Build and push Miabi (rootless)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.debian
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            COMMIT=${{ env.COMMIT }}
+            GO_TAGS=enterprise
+            LICENSE_PUBLIC_KEY=${{ vars.LICENSE_PUBLIC_KEY }}
+          tags: |
+            miabi/miabi:rootless
+            miabi/miabi:latest-rootless
+            miabi/miabi:${{ env.VERSION }}-rootless
+            ghcr.io/miabi-io/miabi:rootless
+            ghcr.io/miabi-io/miabi:latest-rootless
+            ghcr.io/miabi-io/miabi:${{ env.VERSION }}-rootless
+
+
+  installer:
+    runs-on: ubuntu-latest
+    needs: [release, image]
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      # Anonymous pulls suffice for public images; logging in keeps the check
+      # working if the GHCR package is ever made private.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stamp and attach install.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"   # docker tags drop the leading "v"
+
+          # GOMA_VERSION/RUNNER_VERSION may come from repository variables, so
+          # validate rather than trust: a typo would ship an installer pinning an
+          # image nobody published.
+          for v in GOMA_VERSION RUNNER_VERSION; do
+            case "${!v}" in
+              v[0-9]*) ;;
+              *) echo "::error::$v must look like v1.2.3, got '${!v}'"; exit 1 ;;
+            esac
+          done
+
+          # Query the registries themselves, not Docker Hub's web API, so GHCR is
+          # covered too. Retry: a manifest can lag a few seconds behind the push.
+          assert_image() { # <ref>
+            for attempt in 1 2 3 4 5; do
+              if docker buildx imagetools inspect "$1" >/dev/null 2>&1; then
+                echo "  ok $1"; return 0
+              fi
+              echo "  waiting for $1 (attempt ${attempt}/5)"; sleep 10
+            done
+            echo "::error::$1 was never published"; exit 1
+          }
+          assert_image "miabi/miabi:${VERSION}"
+          assert_image "ghcr.io/miabi-io/miabi:${VERSION}"
+          assert_image "jkaninda/goma-gateway:${GOMA_VERSION#v}"
+          assert_image "miabi/runner:${RUNNER_VERSION#v}"
+
+          sed -i \
+            -e "s|^MIABI_VERSION=.*|MIABI_VERSION=\"\${MIABI_VERSION:-${GITHUB_REF_NAME}}\"|" \
+            -e "s|^GOMA_VERSION=.*|GOMA_VERSION=\"\${GOMA_VERSION:-${GOMA_VERSION}}\"|" \
+            -e "s|^RUNNER_VERSION=.*|RUNNER_VERSION=\"\${RUNNER_VERSION:-${RUNNER_VERSION}}\"|" \
+            deploy/install.sh
+
+          # Fail loudly rather than shipping an installer that still says :latest.
+          # -F (fixed string): the pattern contains `${...}`, and a `$` mid-regex
+          # is an anchor in BSD grep, so a plain -q silently never matches.
+          grep -qF "MIABI_VERSION=\"\${MIABI_VERSION:-${GITHUB_REF_NAME}}\"" deploy/install.sh
+          grep -qF "GOMA_VERSION=\"\${GOMA_VERSION:-${GOMA_VERSION}}\"" deploy/install.sh
+          grep -qF "RUNNER_VERSION=\"\${RUNNER_VERSION:-${RUNNER_VERSION}}\"" deploy/install.sh
+          bash -n deploy/install.sh
+
+          gh release upload "${GITHUB_REF_NAME}" deploy/install.sh --clobber

@@ -1,0 +1,170 @@
+<script setup lang="ts">
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { storeToRefs } from 'pinia'
+import { useRoute, useRouter } from 'vue-router'
+import { useWorkspaceStore } from '@/stores/workspace'
+import { useNotificationStore } from '@/stores/notification'
+import { pipelineApi } from '@/api/pipelines'
+import { usePagination } from '@/composables/usePagination'
+import Pagination from '@/components/Pagination.vue'
+import { relativeTime, formatDuration } from '@/utils/time'
+import { statusMeta } from './status'
+import type { PipelineDefinition, PipelineRun } from '@/api/types'
+
+const ws = useWorkspaceStore()
+const notify = useNotificationStore()
+const route = useRoute()
+const router = useRouter()
+const { currentWorkspaceId } = storeToRefs(ws)
+
+const pipelineId = computed(() => Number(route.params.id))
+const pipeline = ref<PipelineDefinition | null>(null)
+const runs = ref<PipelineRun[]>([])
+const loading = ref(false)
+const triggering = ref(false)
+const now = ref(Date.now())
+
+const { pageable, goToPage } = usePagination(async (page) => {
+  const wid = currentWorkspaceId.value
+  if (!wid || !pipelineId.value) { runs.value = []; return }
+  loading.value = true
+  try {
+    const res = await pipelineApi.runs(wid, pipelineId.value, page, pageable.value.size)
+    runs.value = res.data.data
+    pageable.value = res.data.pageable
+  } catch (e) {
+    notify.apiError(e)
+  } finally {
+    loading.value = false
+  }
+})
+
+// The pipeline header loads once; the runs list is paged independently.
+async function loadPipeline() {
+  const wid = currentWorkspaceId.value
+  if (!wid || !pipelineId.value) { pipeline.value = null; return }
+  try {
+    pipeline.value = (await pipelineApi.get(wid, pipelineId.value)).data.data
+  } catch (e) {
+    notify.apiError(e)
+  }
+}
+loadPipeline()
+watch([currentWorkspaceId, pipelineId], () => { loadPipeline(); goToPage(0) })
+
+async function trigger() {
+  const wid = currentWorkspaceId.value
+  if (!wid || !pipeline.value) return
+  triggering.value = true
+  try {
+    const run = (await pipelineApi.trigger(wid, pipeline.value.id)).data.data
+    router.push({ name: 'pipeline-run', params: { id: pipeline.value.id, runId: run.id } })
+  } catch (e) {
+    notify.apiError(e, 'Could not trigger run')
+  } finally {
+    triggering.value = false
+  }
+}
+
+function openRun(r: PipelineRun) {
+  router.push({ name: 'pipeline-run', params: { id: pipelineId.value, runId: r.id } })
+}
+
+// Tick so in-progress run durations count up live.
+const ticker = setInterval(() => { now.value = Date.now() }, 1000)
+onBeforeUnmount(() => clearInterval(ticker))
+</script>
+
+<template>
+  <div>
+    <div class="page-header">
+      <div>
+        <router-link to="/pipelines" class="back-link"><span class="mdi mdi-arrow-left"></span> Pipelines</router-link>
+        <div class="title-row">
+          <h1>{{ pipeline?.display_name || pipeline?.name || 'Pipeline' }}</h1>
+          <span v-if="pipeline?.last_run" class="badge" :class="statusMeta(pipeline.last_run.status).badge">
+            <span class="mdi" :class="statusMeta(pipeline.last_run.status).icon"></span> {{ statusMeta(pipeline.last_run.status).label }}
+          </span>
+        </div>
+        <p class="subtitle">
+          Run history
+          <span v-if="pageable.total_elements"> · {{ pageable.total_elements }} run{{ pageable.total_elements === 1 ? '' : 's' }}</span>
+          <span v-if="pipeline?.last_run" :title="pipeline.last_run.started_at ? new Date(pipeline.last_run.started_at).toLocaleString() : ''">
+            · last run #{{ pipeline.last_run.number }} {{ relativeTime(pipeline.last_run.started_at || pipeline.last_run.created_at, now) }}
+          </span>
+        </p>
+      </div>
+      <button v-if="ws.canEdit && pipeline?.enabled" class="btn btn-primary" :disabled="triggering" @click="trigger">
+        <span class="mdi" :class="triggering ? 'mdi-loading mdi-spin' : 'mdi-play'"></span> Run now
+      </button>
+    </div>
+
+    <div class="card">
+      <div v-if="loading && runs.length === 0" class="card-body"><span class="spinner"></span></div>
+      <div v-else-if="runs.length === 0" class="empty-state">
+        <span class="mdi mdi-history" style="font-size: 44px; color: var(--text-muted)"></span>
+        <h3>No runs yet</h3>
+        <p>Trigger this pipeline to see its run history here.</p>
+        <button v-if="ws.canEdit && pipeline?.enabled" class="btn btn-primary mt-4" :disabled="triggering" @click="trigger">Run now</button>
+      </div>
+      <div v-else class="table-wrapper">
+        <table>
+          <thead><tr><th>Run</th><th>Status</th><th>Commit</th><th>Trigger</th><th>Duration</th><th>Started</th></tr></thead>
+          <tbody>
+            <tr v-for="r in runs" :key="r.id" class="row-link" :class="`rail-${statusMeta(r.status).badge}`" @click="openRun(r)">
+              <td class="cell-title">#{{ r.number }}</td>
+              <td>
+                <span class="badge" :class="statusMeta(r.status).badge">
+                  <span class="mdi" :class="statusMeta(r.status).icon"></span> {{ statusMeta(r.status).label }}
+                </span>
+              </td>
+              <td>
+                <div v-if="r.commit" class="commit-cell">
+                  <span class="mono commit-sha">{{ r.commit.slice(0, 7) }}</span>
+                  <span v-if="r.commit_message" class="commit-msg">{{ r.commit_message }}</span>
+                </div>
+                <span v-else class="cell-sub">—</span>
+              </td>
+              <td class="cell-sub">{{ r.trigger }}</td>
+              <td class="cell-sub">{{ formatDuration(r.started_at, r.finished_at, now) }}</td>
+              <td class="cell-sub" :title="r.started_at ? new Date(r.started_at).toLocaleString() : ''">
+                {{ relativeTime(r.started_at, now) }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <Pagination :pageable="pageable" @page="goToPage" />
+  </div>
+</template>
+
+<style scoped>
+.title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.title-row .badge .mdi { font-size: 13px; }
+.subtitle { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+.back-link { font-size: 13px; color: var(--text-muted); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.back-link:hover { color: var(--primary-500); }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.row-link { cursor: pointer; }
+.badge .mdi { font-size: 13px; }
+.mdi-spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Colored status rail down the left edge of each run row. */
+.row-link td:first-child { position: relative; }
+.row-link td:first-child::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-primary);
+}
+.rail-badge-success td:first-child::before { background: var(--success-600, #16a34a); }
+.rail-badge-danger td:first-child::before { background: var(--danger-600, #dc2626); }
+.rail-badge-info td:first-child::before { background: var(--info-600, var(--primary-500, #6366f1)); }
+
+.commit-cell { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.commit-sha { font-size: 12px; color: var(--text-secondary, var(--text-muted)); flex-shrink: 0; }
+.commit-msg {
+  font-size: 13px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 320px;
+}
+</style>

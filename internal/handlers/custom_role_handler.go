@@ -1,0 +1,180 @@
+// SPDX-FileCopyrightText: 2026 Jonas Kaninda
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package handlers
+
+import (
+	"errors"
+	"strconv"
+
+	"github.com/jkaninda/okapi"
+	"github.com/miabi-io/miabi/internal/enterprise"
+	"github.com/miabi-io/miabi/internal/middlewares"
+	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/services/audit"
+	"github.com/miabi-io/miabi/internal/services/customrole"
+	"github.com/miabi-io/miabi/internal/storage/repositories"
+)
+
+// CustomRoleHandler manages admin-defined roles and their assignment to members.
+// Writes are gated on the custom_roles entitlement; resolution/enforcement of
+// already-assigned roles is open-source (handled in WorkspaceScope).
+type CustomRoleHandler struct {
+	svc        *customrole.Service
+	workspaces *repositories.WorkspaceRepository
+	ee         enterprise.EE
+	audit      *audit.Logger
+}
+
+func NewCustomRoleHandler(svc *customrole.Service, workspaces *repositories.WorkspaceRepository, ee enterprise.EE, auditLog *audit.Logger) *CustomRoleHandler {
+	return &CustomRoleHandler{svc: svc, workspaces: workspaces, ee: ee, audit: auditLog}
+}
+
+type CustomRoleRequest struct {
+	Body struct {
+		Name        string   `json:"name" required:"true"`
+		BaseRole    string   `json:"base_role" required:"true" enum:"owner,admin,developer,viewer"`
+		Permissions []string `json:"permissions" required:"true"`
+	} `json:"body"`
+}
+
+type AssignCustomRoleRequest struct {
+	Body struct {
+		CustomRoleID uint `json:"custom_role_id" required:"true"`
+	} `json:"body"`
+}
+
+// List returns the workspace's custom roles (any member may read).
+func (h *CustomRoleHandler) List(c *okapi.Context) error {
+	wsID := middlewares.WorkspaceID(c)
+	roles, err := h.svc.List(wsID)
+	if err != nil {
+		return c.AbortInternalServerError("failed to list roles", err)
+	}
+	return ok(c, roles)
+}
+
+// Create defines a custom role (gated custom_roles; no-escalation enforced).
+func (h *CustomRoleHandler) Create(c *okapi.Context, req *CustomRoleRequest) error {
+	if err := h.ee.RequireMutable(enterprise.FlagCustomRoles); err != nil {
+		return entitlementAbort(c, err)
+	}
+	wsID := middlewares.WorkspaceID(c)
+	role, err := h.svc.Create(wsID, h.input(req), middlewares.Permissions(c))
+	if err != nil {
+		return h.mapErr(c, err)
+	}
+	h.record(c, wsID, "workspace.role.create", strconv.Itoa(int(role.ID)))
+	return created(c, role)
+}
+
+// Update edits a custom role.
+func (h *CustomRoleHandler) Update(c *okapi.Context, req *CustomRoleRequest) error {
+	if err := h.ee.RequireMutable(enterprise.FlagCustomRoles); err != nil {
+		return entitlementAbort(c, err)
+	}
+	wsID := middlewares.WorkspaceID(c)
+	id, err := uintParam(c, "id")
+	if err != nil {
+		return c.AbortBadRequest("invalid id")
+	}
+	role, err := h.svc.Update(wsID, id, h.input(req), middlewares.Permissions(c))
+	if err != nil {
+		return h.mapErr(c, err)
+	}
+	h.record(c, wsID, "workspace.role.update", strconv.Itoa(int(role.ID)))
+	return ok(c, role)
+}
+
+// Delete removes a custom role (409 if assigned).
+func (h *CustomRoleHandler) Delete(c *okapi.Context) error {
+	if err := h.ee.RequireMutable(enterprise.FlagCustomRoles); err != nil {
+		return entitlementAbort(c, err)
+	}
+	wsID := middlewares.WorkspaceID(c)
+	id, err := uintParam(c, "id")
+	if err != nil {
+		return c.AbortBadRequest("invalid id")
+	}
+	if err := h.svc.Delete(wsID, id); err != nil {
+		return h.mapErr(c, err)
+	}
+	h.record(c, wsID, "workspace.role.delete", strconv.Itoa(int(id)))
+	return message(c, "role deleted")
+}
+
+// AssignMember puts a member on a custom role. Gated custom_roles; the assigning
+// admin may not grant a role exceeding their own permissions, and the last owner
+// may not be moved off an owner-rank role.
+func (h *CustomRoleHandler) AssignMember(c *okapi.Context, req *AssignCustomRoleRequest) error {
+	if err := h.ee.RequireMutable(enterprise.FlagCustomRoles); err != nil {
+		return entitlementAbort(c, err)
+	}
+	wsID := middlewares.WorkspaceID(c)
+	memberID, err := uintParam(c, "userID")
+	if err != nil {
+		return c.AbortBadRequest("invalid user id")
+	}
+	role, err := h.svc.Get(wsID, req.Body.CustomRoleID)
+	if err != nil {
+		return h.mapErr(c, err)
+	}
+	// No-escalation: the assigner must hold every permission they're granting.
+	actor := middlewares.Permissions(c)
+	for p := range role.PermissionSet() {
+		if !actor[p] {
+			return c.AbortForbidden(customrole.ErrEscalation.Error(), customrole.ErrEscalation)
+		}
+	}
+	// Never strand the last owner on a non-owner role.
+	if role.BaseRole != models.WorkspaceRoleOwner {
+		if m, e := h.workspaces.FindMember(wsID, memberID); e == nil && m.Role == models.WorkspaceRoleOwner {
+			if n, _ := h.workspaces.CountOwners(wsID); n <= 1 {
+				return c.AbortWithError(409, errors.New("cannot move the last owner off the owner role"))
+			}
+		}
+	}
+	if err := h.workspaces.SetMemberCustomRole(wsID, memberID, role.ID, role.BaseRole); err != nil {
+		return c.AbortInternalServerError("failed to assign role", err)
+	}
+	h.record(c, wsID, "workspace.member_role_assign", strconv.Itoa(int(memberID)))
+	return message(c, "role assigned")
+}
+
+func (h *CustomRoleHandler) input(req *CustomRoleRequest) customrole.Input {
+	perms := make([]models.Permission, 0, len(req.Body.Permissions))
+	for _, p := range req.Body.Permissions {
+		perms = append(perms, models.Permission(p))
+	}
+	return customrole.Input{
+		Name:        req.Body.Name,
+		BaseRole:    models.WorkspaceRole(req.Body.BaseRole),
+		Permissions: perms,
+	}
+}
+
+func (h *CustomRoleHandler) mapErr(c *okapi.Context, err error) error {
+	switch {
+	case errors.Is(err, customrole.ErrEscalation):
+		return c.AbortForbidden(err.Error(), err)
+	case errors.Is(err, customrole.ErrRoleNotFound):
+		return c.AbortNotFound(err.Error())
+	case errors.Is(err, customrole.ErrRoleInUse):
+		return c.AbortWithError(409, err)
+	case errors.Is(err, customrole.ErrNameRequired),
+		errors.Is(err, customrole.ErrInvalidBaseRole),
+		errors.Is(err, customrole.ErrInvalidPermission),
+		errors.Is(err, customrole.ErrNoPermissions):
+		return c.AbortBadRequest(err.Error())
+	default:
+		return c.AbortInternalServerError("role operation failed", err)
+	}
+}
+
+func (h *CustomRoleHandler) record(c *okapi.Context, wsID uint, action, target string) {
+	actor := middlewares.UserID(c)
+	h.audit.Record(audit.Entry{
+		ActorID: &actor, WorkspaceID: &wsID, Action: action, TargetType: "custom_role",
+		TargetID: target, IP: c.RealIP(),
+	})
+}

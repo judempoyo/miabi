@@ -1,0 +1,41 @@
+# Miabi official template catalog (registry index).
+# Digests are sha256 of each template.yaml; regenerate via `go generate ./templates`.
+apiVersion: miabi.io/v1
+kind: Index
+name: miabi-official
+templates:
+  - name: libsql
+    versions:
+      - version: 1.0.0
+        path: libsql/1.0.0/template.yaml
+        digest: sha256:b91faf71fb412d2038c100a4a5d50e3b7819bd313846b4068fb4bf078ce5d3c8
+  - name: minio
+    versions:
+      - version: 1.0.0
+        path: minio/1.0.0/template.yaml
+        digest: sha256:91a8c8d283ffa0ab59e444ddfa870ff3668dee36720891d17630e57f06873e9b
+  - name: mongodb
+    versions:
+      - version: 1.0.0
+        path: mongodb/1.0.0/template.yaml
+        digest: sha256:5a104d5797a175f4e990c244910d479fe72180b827951b6067509a9372d9d1b5
+  - name: mysql
+    versions:
+      - version: 1.0.0
+        path: mysql/1.0.0/template.yaml
+        digest: sha256:61427dcaec99941d089f17d78eb0a2f485def34a2a08393006cfffe0ce9587dc
+  - name: nginx
+    versions:
+      - version: 1.0.0
+        path: nginx/1.0.0/template.yaml
+        digest: sha256:4ed9eabb17eb4a1ad7e7c50c5c10803f246cd3194bdc41d2d92466184f166563
+  - name: postgresql
+    versions:
+      - version: 1.0.0
+        path: postgresql/1.0.0/template.yaml
+        digest: sha256:8ebff50d692e0258b43b9400e892f70373dce946e7b95186ec159350a959badb
+  - name: redis
+    versions:
+      - version: 1.0.0
+        path: redis/1.0.0/template.yaml
+        digest: sha256:f1b00006157a52b7b90642d98ba03de19b810eb32ad582d2b7d1e4986553d41b

@@ -1,0 +1,117 @@
+// SPDX-FileCopyrightText: 2026 Jonas Kaninda
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package environment manages promotion stages (dev → staging → prod) within a
+// workspace. An Environment carries an ordering rank and an approval policy that
+// the release-promotion flow enforces.
+package environment
+
+import (
+	"errors"
+	"strings"
+
+	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/slug"
+	"github.com/miabi-io/miabi/internal/storage/repositories"
+)
+
+var (
+	ErrNotFound     = errors.New("environment not found")
+	ErrNameTaken    = errors.New("an environment with this name already exists")
+	ErrNameRequired = errors.New("name is required")
+)
+
+// Service manages environments.
+type Service struct {
+	repo *repositories.EnvironmentRepository
+}
+
+// NewService wires the environment service.
+func NewService(repo *repositories.EnvironmentRepository) *Service {
+	return &Service{repo: repo}
+}
+
+// Input is the create/update payload for an environment. Name is the desired
+// unique slug handle; DisplayName is the free-text label (falls back to Name).
+type Input struct {
+	Name              string
+	DisplayName       string
+	Description       string
+	Rank              int
+	RequiredApprovals int
+	GitSourceID       *uint
+}
+
+func (in *Input) normalize() {
+	in.Name = strings.TrimSpace(in.Name)
+	if in.RequiredApprovals < 0 {
+		in.RequiredApprovals = 0
+	}
+}
+
+func (s *Service) Create(workspaceID uint, in Input) (*models.Environment, error) {
+	in.normalize()
+	name := slug.Make(in.Name, "")
+	if name == "" {
+		return nil, ErrNameRequired
+	}
+	displayName := strings.TrimSpace(in.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(in.Name)
+	}
+	if taken, _ := s.repo.ExistsByName(workspaceID, name); taken {
+		return nil, ErrNameTaken
+	}
+	env := &models.Environment{
+		WorkspaceID: workspaceID, Name: name, DisplayName: displayName, Description: in.Description,
+		Rank: in.Rank, RequiredApprovals: in.RequiredApprovals, GitSourceID: in.GitSourceID,
+	}
+	if err := s.repo.Create(env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func (s *Service) Update(workspaceID, id uint, in Input) (*models.Environment, error) {
+	env, err := s.Get(workspaceID, id)
+	if err != nil {
+		return nil, err
+	}
+	in.normalize()
+	if name := slug.Make(in.Name, ""); name != "" && name != env.Name {
+		if taken, _ := s.repo.ExistsByName(workspaceID, name); taken {
+			return nil, ErrNameTaken
+		}
+		env.Name = name
+	}
+	if dn := strings.TrimSpace(in.DisplayName); dn != "" {
+		env.DisplayName = dn
+	}
+	env.Description = in.Description
+	env.Rank = in.Rank
+	env.RequiredApprovals = in.RequiredApprovals
+	env.GitSourceID = in.GitSourceID
+	if err := s.repo.Update(env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func (s *Service) Get(workspaceID, id uint) (*models.Environment, error) {
+	env, err := s.repo.FindInWorkspace(workspaceID, id)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	return env, nil
+}
+
+func (s *Service) List(workspaceID uint) ([]models.Environment, error) {
+	return s.repo.ListByWorkspace(workspaceID)
+}
+
+func (s *Service) Delete(workspaceID, id uint) error {
+	if _, err := s.Get(workspaceID, id); err != nil {
+		return err
+	}
+	return s.repo.Delete(workspaceID, id)
+}

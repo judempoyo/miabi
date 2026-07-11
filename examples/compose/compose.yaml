@@ -1,0 +1,146 @@
+# Miabi — full-featured single-node stack (example).
+#
+# A copy-and-run reference that turns on the optional pieces most self-hosters
+# want: the reverse-proxy gateway (TLS/ACME), the built-in container registry,
+# one-click public app URLs (wildcard domain), and an externalized log store on
+# a shared volume. It also shows how to scale the background worker out of the
+# panel process.
+#
+# This complements ../../deploy/compose.yaml (the minimal production stack).
+# Prefer that one for a bare install; use this to see the knobs.
+#
+# Quick start:
+#   cp .env.example .env         # then edit: domains + secrets (openssl rand -hex 32)
+#   echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> .env
+#   docker compose up -d
+#
+# DNS: point your panel domain AND *.<apps base domain> at this host, so Goma
+# can issue certs and serve one-click app URLs.
+
+services:
+  miabi-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MIABI_DB_USER:-miabi}
+      POSTGRES_PASSWORD: ${MIABI_DB_PASSWORD:?set MIABI_DB_PASSWORD}
+      POSTGRES_DB: ${MIABI_DB_NAME:-miabi}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [miabi]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MIABI_DB_USER:-miabi}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  miabi-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${MIABI_REDIS_PASSWORD:?set MIABI_REDIS_PASSWORD}"]
+    volumes:
+      - redisdata:/data
+    networks: [miabi]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${MIABI_REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Reverse proxy: terminates TLS (ACME/Let's Encrypt), routes the panel domain
+  # to Miabi, and serves the per-app route files Miabi writes into the shared
+  # providers volume. goma.yml here interpolates the domains + Redis password
+  # from this service's environment.
+  gateway:
+    image: jkaninda/goma-gateway:latest
+    restart: unless-stopped
+    depends_on:
+      miabi-redis: { condition: service_healthy }
+    environment:
+      MIABI_DOMAIN: ${MIABI_DOMAIN:?set MIABI_DOMAIN}
+      MIABI_ACME_EMAIL: ${MIABI_ACME_EMAIL:-admin@example.com}
+      MIABI_REDIS_PASSWORD: ${MIABI_REDIS_PASSWORD}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./goma.yml:/etc/goma/goma.yml:ro
+      - gateway-providers:/etc/goma/providers
+      - gateway-certs:/etc/letsencrypt
+    networks: [miabi]
+
+  # Control plane: single binary serving the API + web UI. The background worker
+  # runs embedded here by default (see the optional `miabi-worker` below to scale
+  # it out). This is also the process that holds runner tunnels and builds.
+  miabi:
+    image: ${MIABI_IMAGE:-miabi/miabi:latest}
+    restart: unless-stopped
+    # Runs as root by default. To run unprivileged, uncomment `user` below — the
+    # image ships a miabi account (uid/gid 10001) and its data dirs are owned by
+    # it, so named volumes just work. group_add still grants Docker socket access
+    # either way:
+    #   echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> .env
+    # user: "10001:10001"
+    group_add:
+      - "${DOCKER_GID:-999}"
+    depends_on:
+      miabi-postgres: { condition: service_healthy }
+      miabi-redis: { condition: service_healthy }
+    # Pass the whole .env into the container so the feature toggles (registry,
+    # base domain, SMTP, license, …) flow through without listing each here.
+    env_file:
+      - .env
+    environment:
+      MIABI_ENV: production
+      MIABI_PORT: "9000"
+      MIABI_DB_HOST: miabi-postgres
+      MIABI_REDIS_ADDR: miabi-redis:6379
+      MIABI_PROXY_NETWORK: miabi
+      MIABI_GOMA_PROVIDER_DIR: /etc/goma/providers
+      # Public panel URL — also the CORS allowlist (production rejects "*").
+      MIABI_WEB_URL: ${MIABI_WEB_URL:?set MIABI_WEB_URL, e.g. https://miabi.example.com}
+      MIABI_CONTROL_URL: ${MIABI_WEB_URL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - gateway-providers:/etc/goma/providers
+      # Externalized log store (deploy/pipeline/job/backup logs). Keep this on a
+      # volume so logs survive restarts — and share the SAME volume with the
+      # optional worker below so the panel can read the logs the worker writes.
+      - miabi-logs:/var/lib/miabi/logs
+      - /proc:/host/proc:ro
+    networks: [miabi]
+
+  # OPTIONAL — scale the background worker out of the panel process. It consumes
+  # the local job/deploy/backup queues; the panel's embedded worker keeps the
+  # remote-node + runner-dispatch work (it holds the tunnels). It MUST mount the
+  # same miabi-logs volume so the panel can read the logs it externalizes.
+  # Uncomment to enable.
+  # miabi-worker:
+  #   image: ${MIABI_IMAGE:-miabi/miabi:latest}
+  #   command: ["worker"]
+  #   restart: unless-stopped
+  #   group_add: ["${DOCKER_GID:-999}"]
+  #   depends_on:
+  #     miabi-postgres: { condition: service_healthy }
+  #     miabi-redis: { condition: service_healthy }
+  #   env_file: [.env]
+  #   environment:
+  #     MIABI_ENV: production
+  #     MIABI_DB_HOST: miabi-postgres
+  #     MIABI_REDIS_ADDR: miabi-redis:6379
+  #     MIABI_PROXY_NETWORK: miabi
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - miabi-logs:/var/lib/miabi/logs
+  #   networks: [miabi]
+
+volumes:
+  pgdata:
+  redisdata:
+  gateway-providers:
+  gateway-certs:
+  miabi-logs:
+
+networks:
+  miabi:
+    name: miabi

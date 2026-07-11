@@ -1,0 +1,18 @@
+Miabi
+Copyright 2026 Jonas Kaninda
+
+This product includes software developed by Jonas Kaninda and the Miabi
+contributors (https://github.com/miabi-io/miabi).
+
+Licensed under the GNU Affero General Public License, version 3 or (at your
+option) any later version (AGPL-3.0-or-later); you may not use this software
+except in compliance with the License. A copy of the License is included in the
+LICENSE file and is available at https://www.gnu.org/licenses/agpl-3.0.html.
+
+A commercial license is available for uses that do not fit the AGPL; see
+LICENSING.md.
+
+The Miabi Enterprise Edition — the source under internal/enterprise/ (compiled
+only with the "enterprise" build tag) — is NOT licensed under the AGPL. It is
+proprietary and governed by a separate commercial license; see
+internal/enterprise/LICENSE.md and LICENSING.md.

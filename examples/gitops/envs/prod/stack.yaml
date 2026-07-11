@@ -1,0 +1,45 @@
+# Production environment desired state. A separate GitSource pointed at path
+# `envs/prod` reconciles these manifests. Promotion = a commit that bumps the
+# digest below (auditable, reconciled — not a side-channel deploy).
+apiVersion: miabi.io/v1
+kind: Database
+metadata: { name: shop-db }
+spec:
+  engine: postgres
+  version: "16-alpine"
+---
+apiVersion: miabi.io/v1
+kind: Volume
+metadata: { name: shop-data }
+spec:
+  size: 20Gi
+---
+apiVersion: miabi.io/v1
+kind: Application
+metadata: { name: shop-web }
+spec:
+  image: miabi/guestbook
+  tag: "2.0.0"
+  # Pinned to an immutable digest — prod always runs exactly what was tested.
+  digest: "sha256:6b3a1f0d9c2e4a5b8d7c6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b"
+  command: ["server", "--port=8080"]
+  ports:
+    - container: 8080
+  env:
+    DATABASE_URL: "{{ .databases.shop-db.uri }}"
+    LOG_LEVEL: info
+  mounts:
+    - volume: shop-data
+      path: /var/lib/shop
+  resources:
+    memory: 1Gi
+    cpu: "1"
+---
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-web-public }
+spec:
+  hosts: [shop.example.com]
+  app: shop-web
+  port: 8080
+  tls: acme

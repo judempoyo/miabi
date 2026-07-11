@@ -1,0 +1,58 @@
+# Okapi Example — reference app for the Okapi Go API framework (middleware,
+# routing, real-time SSE, auto-generated OpenAPI docs at /docs).
+#
+# This is the GitOps form of the `okapi-example` marketplace template: the same
+# app expressed as miabi.io/v1 manifests a GitSource reconciles from Git, instead
+# of a one-click install. Point a GitSource at this folder and Miabi converges
+# the workspace to it on every push / sweep (see ../README.md).
+#
+# Differences from the marketplace template (apply/GitOps vs marketplace):
+#   • {{ .inputs.* }} helpers are marketplace-only. The template auto-generates
+#     jwt_secret; here you set a literal value and list it under `secretEnv` so
+#     Miabi stores it encrypted at rest — CHANGE IT before applying.
+#   • `healthcheck` is a marketplace-only field; container health is managed by
+#     the platform, so it isn't part of the declarative Application spec.
+apiVersion: miabi.io/v1
+kind: Application
+metadata:
+  name: okapi-example
+spec:
+  image: jkaninda/okapi-example
+  tag: "latest"
+  ports:
+    - container: 8080
+      scheme: http
+      # Publish a public HTTPS URL at `<externalLabel>.<platform-base-domain>`
+      # via the reverse proxy (requires a platform base domain to be configured).
+      # Prefer pinning to a digest in prod; see the Route/Domain alternative below.
+      externalAccess: true
+  externalLabel: okapi
+  env:
+    # CHANGE ME before applying — stored encrypted (listed under secretEnv).
+    JWT_SECRET: "change-me-to-a-long-random-string"
+    ENABLE_DOCS: "true"
+  secretEnv:
+    - JWT_SECRET
+  resources:
+    memory: 256Mi
+    cpu: "0.25"
+
+# ── Alternative: serve on your own hostname ──────────────────────────────────
+# Instead of `externalAccess: true`, drop the externalAccess/externalLabel lines
+# and add a Domain + Route for a custom host with automatic Let's Encrypt TLS:
+#
+# ---
+# apiVersion: miabi.io/v1
+# kind: Domain
+# metadata: { name: okapi.example.com }
+# spec:
+#   tls: acme
+# ---
+# apiVersion: miabi.io/v1
+# kind: Route
+# metadata: { name: okapi-example-web }
+# spec:
+#   hosts: [okapi.example.com]
+#   app: okapi-example
+#   port: 8080
+#   tls: acme

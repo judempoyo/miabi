@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: 2026 Jonas Kaninda
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package auth
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/storage/repositories"
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func authTestService(t *testing.T) *Service {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	if err := db.AutoMigrate(&models.User{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	hash, _ := bcrypt.GenerateFromPassword([]byte("s3cret-pass"), bcrypt.DefaultCost)
+	users := []models.User{
+		{Name: "Jane", Username: "jane", Email: "jane@example.com", PasswordHash: string(hash), Role: models.SystemRoleUser, Active: true},
+		{Name: "Off", Username: "off", Email: "off@example.com", PasswordHash: string(hash), Role: models.SystemRoleUser, Active: false},
+	}
+	for i := range users {
+		if err := db.Create(&users[i]).Error; err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+	}
+	// GORM applies the `default:true` for a zero-value Active at insert, so force
+	// the disabled account off explicitly.
+	if err := db.Model(&models.User{}).Where("username = ?", "off").Update("active", false).Error; err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	// Authenticate only touches the user repository.
+	return NewService(repositories.NewUserRepository(db), nil, nil, nil, "test-secret")
+}
+
+func TestAuthenticateByEmailOrUsername(t *testing.T) {
+	s := authTestService(t)
+
+	cases := []struct {
+		name       string
+		identifier string
+		password   string
+		wantErr    error
+	}{
+		{"by email", "jane@example.com", "s3cret-pass", nil},
+		{"by username", "jane", "s3cret-pass", nil},
+		{"email case-insensitive", "JANE@example.com", "s3cret-pass", nil},
+		{"wrong password", "jane", "nope", ErrInvalidCredentials},
+		{"unknown handle", "ghost", "s3cret-pass", ErrInvalidCredentials},
+		{"disabled account", "off", "s3cret-pass", ErrAccountDisabled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			u, err := s.Authenticate(tc.identifier, tc.password)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Authenticate(%q) err = %v, want %v", tc.identifier, err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Authenticate(%q) unexpected error: %v", tc.identifier, err)
+			}
+			if u.Username != "jane" {
+				t.Errorf("resolved user = %q, want jane", u.Username)
+			}
+		})
+	}
+}

@@ -1,0 +1,42 @@
+# Dev environment desired state. A GitOps GitSource pointed at path `envs/dev`
+# reconciles these manifests into the workspace on every push / sweep.
+apiVersion: miabi.io/v1
+kind: Database
+metadata: { name: shop-db }
+spec:
+  engine: postgres
+  version: "16-alpine"
+---
+apiVersion: miabi.io/v1
+kind: Volume
+metadata: { name: shop-data }
+spec:
+  size: 2Gi
+---
+apiVersion: miabi.io/v1
+kind: Application
+metadata: { name: shop-web }
+spec:
+  image: miabi/guestbook
+  tag: "1.0.0"
+  command: ["server", "--port=8080"]
+  ports:
+    - container: 8080
+  env:
+    DATABASE_URL: "{{ .databases.shop-db.uri }}"
+    LOG_LEVEL: debug
+  mounts:
+    - volume: shop-data
+      path: /var/lib/shop
+  resources:
+    memory: 256Mi
+    cpu: "0.25"
+---
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-web-dev }
+spec:
+  hosts: [dev.shop.example.com]
+  app: shop-web
+  port: 8080
+  tls: acme

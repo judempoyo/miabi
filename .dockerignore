@@ -1,0 +1,9 @@
+bin/
+web/node_modules
+web/dist
+# Built UI is produced by the web stage and copied into internal/web/dist inside
+# the build stage, so any locally-built copy must not leak in via `COPY . .`.
+internal/web/dist
+**/*_test.go
+.git
+dist/

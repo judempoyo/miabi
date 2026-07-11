@@ -1,0 +1,89 @@
+# Declaratively owning a domain and exposing an application under it.
+#
+# Two related kinds:
+#   • Domain — an owned hostname/zone you control. Its metadata.name is the real
+#     FQDN. It records the default TLS policy and (optionally) wildcard coverage.
+#     DNS-ownership verification (publishing the TXT token) is a runtime action,
+#     so an applied domain starts unverified.
+#   • Route  — an HTTP routing rule (host/path → app:port + TLS). Routes are what
+#     actually expose an app; they bind hostnames that live under your domains.
+#
+# Goma Gateway terminates TLS and (for `tls: acme`) obtains/renews the Let's
+# Encrypt certificate; Miabi only declares the desired state.
+#
+# Apply with the declarative apply API (or GitOps):
+#   POST /api/v1/workspaces/{ws}/apply
+#   { "manifests": "<this file>", "dry_run": true }   # preview the plan
+#   { "manifests": "<this file>" }                     # converge
+
+# The owned apex zone, covering the apex and (wildcard) every subdomain, with
+# Let's Encrypt as the default certificate policy.
+apiVersion: miabi.io/v1
+kind: Domain
+metadata: { name: shop.example.com }
+spec:
+  tls: acme               # acme (Let's Encrypt, default) | custom (cert uploaded out-of-band)
+  wildcard: true          # also covers *.shop.example.com
+---
+# A second owned hostname served with a custom certificate.
+apiVersion: miabi.io/v1
+kind: Domain
+metadata: { name: secure.shop.example.com }
+spec:
+  tls: custom
+---
+# The target application the routes below point at.
+apiVersion: miabi.io/v1
+kind: Application
+metadata: { name: shop-web }
+spec:
+  image: miabi/guestbook
+  tag: "1.0.0"
+  command: ["server", "--port=8080"]
+  ports:
+    - container: 8080
+      scheme: http
+---
+# Apex + www on a single Route — one rule can answer on several hostnames.
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-web }
+spec:
+  hosts:
+    - shop.example.com
+    - www.shop.example.com
+  app: shop-web
+  port: 8080
+  tls: acme              # acme | custom | off (default: acme)
+---
+# Path-based routing: only /api on the apex host goes to this app.
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-api }
+spec:
+  hosts: [shop.example.com]
+  path: /api
+  app: shop-web
+  port: 8080
+  tls: acme
+---
+# A domain served with a custom certificate. Upload the cert/key out-of-band
+# (the imperative certificate API); the Route just selects `custom`.
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-custom-cert }
+spec:
+  hosts: [secure.shop.example.com]
+  app: shop-web
+  port: 8080
+  tls: custom
+---
+# Internal/plain-HTTP route (no TLS) — e.g. behind an upstream load balancer.
+apiVersion: miabi.io/v1
+kind: Route
+metadata: { name: shop-internal }
+spec:
+  hosts: [internal.shop.example.com]
+  app: shop-web
+  port: 8080
+  tls: off

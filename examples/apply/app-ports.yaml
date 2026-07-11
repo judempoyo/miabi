@@ -1,0 +1,51 @@
+# Exposing an application's ports declaratively from the Application kind.
+#
+# Two orthogonal per-port knobs:
+#   • externalAccess: true  → a public HTTPS URL on `<externalLabel>.<base-domain>`
+#                             served through the reverse proxy (L7). The platform
+#                             base domain must be configured by an admin.
+#   • publish: true         → bind the container port to a host port on the node
+#     hostPort: <n>           (raw TCP/UDP, like `docker -p`). Omit hostPort (or 0)
+#                             to auto-allocate from the host-port pool; set it to
+#                             request a specific port.
+#
+# `externalLabel` pins the external-access subdomain so the public URL is stable
+# across applies (otherwise Miabi generates a stable-but-random label).
+#
+#   POST /api/v1/workspaces/{ws}/apply  { "manifests": "<this file>" }
+
+apiVersion: miabi.io/v1
+kind: Application
+metadata:
+  name: shop-web
+  # labels: short, identifying key/values you select and group on.
+  labels:
+    env: prod
+    region: eu2
+    dc: "2"
+  # annotations: descriptive free-form metadata the engine stores but never
+  # queries — links, owners, tooling hints, etc.
+  annotations:
+    miabi.io/owner: platform-team
+    miabi.io/description: "Public storefront web tier"
+spec:
+  image: miabi/guestbook
+  tag: "1.0.0"
+  command: ["server"]
+  externalLabel: shop          # public URL: https://shop.<base-domain>
+  ports:
+    # Web UI: reachable on a public HTTPS URL via the reverse proxy.
+    - container: 8080
+      scheme: http
+      externalAccess: true
+
+    # Metrics: bound to a fixed host port for a local Prometheus to scrape.
+    - container: 9090
+      protocol: tcp
+      publish: true
+      hostPort: 19090
+
+    # A raw TCP service exposed on an auto-allocated host port.
+    - container: 5000
+      protocol: tcp
+      publish: true

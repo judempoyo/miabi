@@ -1,0 +1,71 @@
+# A complete application bundled as a single miabi.io/v1 Project: a managed
+# Postgres database, a persistent volume, a generated secret, the web app
+# (pinned to an immutable image digest), and a public route with automatic TLS.
+#
+# Apply it with the declarative apply API:
+#   POST /api/v1/workspaces/{ws}/apply
+#   { "manifests": "<this file>", "dry_run": true }   # preview the plan
+#   { "manifests": "<this file>" }                     # converge the workspace
+#
+# Supported env interpolation in apply/GitOps: {{ .databases.<name>.host|port|
+# user|password|name|uri }}.
+apiVersion: miabi.io/v1
+kind: Project
+metadata:
+  name: shop
+spec:
+  description: Example storefront — database, volume, app, secret and route.
+  resources:
+    - apiVersion: miabi.io/v1
+      kind: Database
+      metadata: { name: shop-db }
+      spec:
+        engine: postgres
+        version: "16-alpine"
+        placement: auto          # auto | dedicated | shared
+
+    - apiVersion: miabi.io/v1
+      kind: Volume
+      metadata: { name: shop-data }
+      spec:
+        size: 5Gi
+
+    - apiVersion: miabi.io/v1
+      kind: Secret
+      metadata: { name: shop-session-key }
+      spec:
+        generate: true           # value is generated at create time
+        length: 48
+
+    - apiVersion: miabi.io/v1
+      kind: Application
+      metadata: { name: shop-web }
+      spec:
+        image: miabi/guestbook
+        tag: "1.0.0"
+        # CI writes the immutable digest here; deploy records exactly what ran.
+        digest: "sha256:6b3a1f0d9c2e4a5b8d7c6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b"
+        command: ["server", "--port=8080"]
+        ports:
+          - container: 8080
+            scheme: http
+        env:
+          DATABASE_URL: "{{ .databases.shop-db.uri }}"
+          LOG_LEVEL: info
+          API_TOKEN: "set-me"      # marked secret below — stored encrypted
+        secretEnv: [API_TOKEN]
+        mounts:
+          - volume: shop-data
+            path: /var/lib/shop
+        resources:
+          memory: 512Mi
+          cpu: "0.5"
+
+    - apiVersion: miabi.io/v1
+      kind: Route
+      metadata: { name: shop-web-public }
+      spec:
+        hosts: [shop.example.com]
+        app: shop-web
+        port: 8080
+        tls: acme                # acme | custom | off

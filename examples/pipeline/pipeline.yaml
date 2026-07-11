@@ -1,0 +1,24 @@
+# Minimal pipeline-as-code (kind: Pipeline). Paste it into a pipeline definition
+# in the UI (Pipelines → New), or keep it as .miabi/pipeline.yaml in your repo.
+#
+# Bind the pipeline to a Git-backed application: the runner clones that app's
+# repo once at the run's commit into a shared workspace mounted at /workspace,
+# then runs each step over it. `uses: build` turns the workspace into an image
+# (capturing its digest); `uses: deploy` deploys that exact image — no rebuild.
+apiVersion: miabi.io/v1
+kind: Pipeline
+metadata:
+  name: shop-web
+on:
+  push:
+    branches: [main]   # a push to main fires this pipeline (see ../README → git triggers)
+  manual: true
+steps:
+  - name: test
+    image: node:20
+    run: "npm ci && npm test"   # runs in /workspace; sees the checked-out repo
+  - name: build
+    uses: build
+    dockerfile: Dockerfile      # relative to the workspace root; default: Dockerfile
+  - name: deploy
+    uses: deploy                # deploys the image the build step produced, pinned to the run's commit

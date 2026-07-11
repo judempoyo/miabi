@@ -1,0 +1,21 @@
+# Binaries
+/bin/
+/miabi
+
+# Env
+.env
+
+# Go
+*.test
+*.out
+coverage.txt
+.DS_Store
+
+# Embedded web UI: the built assets are a `make build-ui` artifact baked into the
+# binary at compile time. Only the placeholder is committed so `go build` works
+# without a UI build; the real output is generated in CI/release.
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+
+# GoReleaser output
+/dist/
