@@ -138,8 +138,8 @@ const navSections: NavSection[] = [
   },
   {
     id: 'admin',
-    title: 'Admin',
-    defaultOpen: false,
+    title: 'Platform Admin',
+    defaultOpen: true,
     items: [
       { name: 'Dashboard', path: '/admin/metrics', icon: 'mdi-view-dashboard-outline', requiresAdmin: true },
       { name: 'Users', path: '/admin/users', icon: 'mdi-account-group-outline', requiresAdmin: true },
@@ -520,7 +520,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                   class="user-dropdown-item"
                   @click.stop="userMenuOpen = false"
                 >
-                  <span class="mdi mdi-shield-crown-outline"></span> Platform Administration
+                  <span class="mdi mdi-shield-crown-outline"></span> Platform Admin
                 </RouterLink>
                 <RouterLink to="/account/profile" class="user-dropdown-item" @click.stop="userMenuOpen = false">
                   <span class="mdi mdi-account-outline"></span> Profile

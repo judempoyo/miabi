@@ -133,7 +133,7 @@ onBeforeUnmount(() => {
   <div>
     <div class="page-header">
       <div>
-        <h1>Admin Dashboard</h1>
+        <h1>Platform Admin Dashboard</h1>
         <p class="subtitle">Platform health and activity at a glance</p>
       </div>
       <div class="live-indicator">
