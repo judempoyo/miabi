@@ -16,7 +16,7 @@
   <a href="#feature-comparison">Comparison</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="https://github.com/miabi-io/miabi-cli">CLI</a> ·
-  <a href="#documentation">Docs</a>
+  <a href="https://docs.miabi.io">Docs</a>
 </p>
 
 <p align="center">
@@ -311,7 +311,7 @@ Installs Docker if needed, fetches the production compose + config into
 `/opt/miabi`, generates secrets, and brings the stack up:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/miabi-io/miabi/main/deploy/install.sh | sudo bash
+curl -fsSL https://github.com/miabi-io/miabi/releases/latest/download/install.sh | sudo bash
 ```
 
 Then edit `/opt/miabi/.env` (set your domain) and `/opt/miabi/goma/goma.yml`
