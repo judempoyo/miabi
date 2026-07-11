@@ -400,94 +400,36 @@ sign in as the other customer to confirm the isolation boundary.
 Miabi's web console manages every resource — deployments, domains, databases,
 backups, monitoring, marketplace, teams, and the admin platform.
 
-<details>
-<summary><strong>Click to expand all screenshots</strong></summary>
-
-### Workspace dashboard
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/dashboard.png" alt="Workspace dashboard" width="900"/>
-</p>
-
-### Deploy an application
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/deploy-new-app.png" alt="Deploy a new application from Git, image, or template" width="900"/>
-</p>
-
-### Login screen
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/login-screen.png" alt="Miabi login screen" width="900"/>
-</p>
-
-### Application overview & deployments
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/application-overview.png" alt="Application overview and deployment history" width="900"/>
-</p>
-
-### Canary deployment
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/canary-deployment.png" alt="Deploying an application with the canary strategy — weighted traffic split between the stable and canary releases" width="900"/>
-</p>
-
-### GitOps deployment
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/gitops-deployment.png" alt="GitOps deployment — declarative, pull-based reconciliation from miabi.io/v1 manifests" width="900"/>
-</p>
-
-### CI/CD pipelines
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/pipelines.png" alt="CI/CD pipelines — build, test, and deploy runs on the internal runner with live per-step logs" width="900"/>
-</p>
-
-### Marketplace
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/marketplace.png" alt="Marketplace templates" width="900"/>
-</p>
-
-### Domains, routes & TLS
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/domains-routes.png" alt="Domains, routes, and automatic TLS" width="900"/>
-</p>
-
-### Managed databases
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/databases.png" alt="Managed databases" width="900"/>
-</p>
-
-### Backups
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/backups.png" alt="Scheduled and manual backups" width="900"/>
-</p>
-
-### Monitoring
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/monitoring.png" alt="Container and workspace monitoring" width="900"/>
-</p>
-
-### Nodes & cluster
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/nodes-cluster.png" alt="Multi-node and cluster management" width="900"/>
-</p>
-
-### Admin platform
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/admin-platform.png" alt="Admin platform" width="900"/>
-</p>
-
-</details>
+<table>
+  <tr>
+    <td width="50%" align="center"><strong>Workspace dashboard</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/dashboard.png" alt="Workspace dashboard" width="420"/></td>
+    <td width="50%" align="center"><strong>Deploy an application</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/deploy-new-app.png" alt="Deploy a new application from Git, image, or template" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>Login screen</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/login-screen.png" alt="Miabi login screen" width="420"/></td>
+    <td width="50%" align="center"><strong>Application overview &amp; deployments</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/application-overview.png" alt="Application overview and deployment history" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>Canary deployment</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/canary-deployment.png" alt="Canary strategy — weighted traffic split between the stable and canary releases" width="420"/></td>
+    <td width="50%" align="center"><strong>GitOps deployment</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/gitops-deployment.png" alt="GitOps — declarative, pull-based reconciliation from miabi.io/v1 manifests" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>CI/CD pipelines</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/pipelines.png" alt="CI/CD pipelines with live per-step logs" width="420"/></td>
+    <td width="50%" align="center"><strong>Marketplace</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/marketplace.png" alt="Marketplace templates" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>Domains, routes &amp; TLS</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/domains-routes.png" alt="Domains, routes, and automatic TLS" width="420"/></td>
+    <td width="50%" align="center"><strong>Managed databases</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/databases.png" alt="Managed databases" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>Backups</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/backups.png" alt="Scheduled and manual backups" width="420"/></td>
+    <td width="50%" align="center"><strong>Monitoring</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/monitoring.png" alt="Container and workspace monitoring" width="420"/></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><strong>Nodes &amp; cluster</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/nodes-cluster.png" alt="Multi-node and cluster management" width="420"/></td>
+    <td width="50%" align="center"><strong>Platform admin</strong><br/><img src="https://raw.githubusercontent.com/miabi-io/miabi/main/docs/screenshots/admin-platform.png" alt="Platform admin" width="420"/></td>
+  </tr>
+</table>
 
 ---
 
