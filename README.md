@@ -464,6 +464,11 @@ Contributions are welcome. Please open an issue before submitting a pull request
 
 ---
 
+## Contact
+
+- Email: maintainers@miabi.io
+---
+
 ## License
 
 Miabi core is free and open source under the **GNU Affero General Public License
