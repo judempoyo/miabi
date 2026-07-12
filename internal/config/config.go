@@ -33,8 +33,9 @@ type Config struct {
 	JWTSecret     string
 	EncryptionKey string
 
-	AdminEmail    string
-	AdminPassword string
+	AdminEmail           string
+	AdminPassword        string
+	PasswordResetEnabled bool
 
 	OpenAPIDocs    bool
 	MetricsEnabled bool
@@ -401,6 +402,7 @@ func New() *Config {
 		EncryptionKey:         goutils.Env("MIABI_ENCRYPTION_KEY", ""),
 		AdminEmail:            goutils.Env("MIABI_ADMIN_EMAIL", "admin@example.com"),
 		AdminPassword:         goutils.Env("MIABI_ADMIN_PASSWORD", defaultAdminPassword),
+		PasswordResetEnabled:  goutils.EnvBool("MIABI_PASSWORD_RESET_ENABLED", true),
 		OpenAPIDocs:           goutils.EnvBool("MIABI_OPENAPI_DOCS", true),
 		UpdateCheck:           goutils.EnvBool("MIABI_UPDATE_CHECK", true),
 		MetricsEnabled:        goutils.EnvBool("MIABI_METRICS_ENABLED", false),

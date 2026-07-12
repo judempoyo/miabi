@@ -32,6 +32,10 @@ type AuthHandler struct {
 	settings *settings.Provider
 	mailer   *mailer.Service
 	devMode  bool
+	// passwordResetEnabled gates the self-service "forgot password" flow. A
+	// critical auth control, so it is fixed at boot from MIABI_PASSWORD_RESET_ENABLED
+	// rather than a runtime setting — changing it requires a restart.
+	passwordResetEnabled bool
 	// enforceSSO reports whether a user must sign in via SSO (password login
 	// blocked). Set by SetSSOEnforcement; nil means never enforced. Platform
 	// admins are exempt by the closure so a misconfigured IdP can't lock everyone
@@ -59,8 +63,8 @@ func (h *AuthHandler) SetDirectoryLogin(fn func(ctx context.Context, identifier,
 // Optional; without it (or without SMTP configured) the email is skipped.
 func (h *AuthHandler) SetMailer(m *mailer.Service) { h.mailer = m }
 
-func NewAuthHandler(a *auth.Service, users *repositories.UserRepository, sessions *repositories.SessionRepository, auditLog *audit.Logger, settingsProvider *settings.Provider, devMode bool) *AuthHandler {
-	return &AuthHandler{auth: a, users: users, sessions: sessions, audit: auditLog, settings: settingsProvider, devMode: devMode}
+func NewAuthHandler(a *auth.Service, users *repositories.UserRepository, sessions *repositories.SessionRepository, auditLog *audit.Logger, settingsProvider *settings.Provider, devMode, passwordResetEnabled bool) *AuthHandler {
+	return &AuthHandler{auth: a, users: users, sessions: sessions, audit: auditLog, settings: settingsProvider, devMode: devMode, passwordResetEnabled: passwordResetEnabled}
 }
 
 // --- DTOs ---
@@ -216,7 +220,7 @@ func profileOf(u *models.User) UserProfile {
 // admin from the Users page.
 func (h *AuthHandler) Status(c *okapi.Context) error {
 	return ok(c, AuthStatus{
-		PasswordResetEnabled: h.settings.Bool(settings.KeyPasswordResetEnabled, true),
+		PasswordResetEnabled: h.passwordResetEnabled,
 	})
 }
 
@@ -374,10 +378,10 @@ func (h *AuthHandler) Me(c *okapi.Context) error {
 
 // ForgotPassword issues a reset token and emails the reset link. Always returns
 // 200 to avoid leaking whether the email exists. Self-service password reset is
-// gated by the admin "password_reset_enabled" setting: when disabled, no token
-// is created and no email is sent.
+// gated by MIABI_PASSWORD_RESET_ENABLED (a boot-time control): when disabled, no
+// token is created and no email is sent.
 func (h *AuthHandler) ForgotPassword(c *okapi.Context, req *ForgotPasswordRequest) error {
-	if !h.settings.Bool(settings.KeyPasswordResetEnabled, true) {
+	if !h.passwordResetEnabled {
 		return message(c, "if the email exists, a reset link has been sent")
 	}
 	raw, user, err := h.auth.CreatePasswordReset(req.Body.Email)
