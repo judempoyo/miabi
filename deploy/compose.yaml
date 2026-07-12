@@ -65,6 +65,10 @@ services:
       MIABI_ACME_EMAIL: ${MIABI_ACME_EMAIL:-admin@example.com}
       # Goma uses Redis for shared caching + distributed rate limiting (see goma.yml).
       MIABI_REDIS_PASSWORD: ${MIABI_REDIS_PASSWORD:?set MIABI_REDIS_PASSWORD}
+      # Must match the miabi service's value: Miabi encrypts the config it writes
+      # and Goma decrypts it here before applying. Empty (default) = no config
+      # encryption on either side.
+      GOMA_CONFIG_ENCRYPTION_KEY: ${GOMA_CONFIG_ENCRYPTION_KEY:-}
     ports:
       - "80:80"
       - "443:443"
@@ -102,6 +106,11 @@ services:
       MIABI_REDIS_PASSWORD: ${MIABI_REDIS_PASSWORD}
       MIABI_JWT_SECRET: ${MIABI_JWT_SECRET:?set MIABI_JWT_SECRET}
       MIABI_ENCRYPTION_KEY: ${MIABI_ENCRYPTION_KEY:?set MIABI_ENCRYPTION_KEY}
+      # Optional: encrypts the sensitive parts of gateway config (middleware rules
+      # + TLS) at rest. Miabi encrypts what it writes; each Goma gateway decrypts
+      # with the SAME key — so it must match the gateway service above (Miabi also
+      # injects it into remote edge gateways it provisions). Empty = off.
+      GOMA_CONFIG_ENCRYPTION_KEY: ${GOMA_CONFIG_ENCRYPTION_KEY:-}
       # Seeded on first boot; production refuses to start on the default password.
       MIABI_ADMIN_EMAIL: ${MIABI_ADMIN_EMAIL:-admin@example.com}
       MIABI_ADMIN_PASSWORD: ${MIABI_ADMIN_PASSWORD:?set MIABI_ADMIN_PASSWORD}

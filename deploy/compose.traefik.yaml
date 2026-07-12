@@ -140,6 +140,9 @@ services:
       MIABI_REDIS_PASSWORD: ${MIABI_REDIS_PASSWORD}
       MIABI_JWT_SECRET: ${MIABI_JWT_SECRET:?set MIABI_JWT_SECRET}
       MIABI_ENCRYPTION_KEY: ${MIABI_ENCRYPTION_KEY:?set MIABI_ENCRYPTION_KEY}
+      # Optional: injected into edge gateways so Goma encrypts its sensitive
+      # config (middleware rules + TLS) at rest. Empty = off.
+      GOMA_CONFIG_ENCRYPTION_KEY: ${GOMA_CONFIG_ENCRYPTION_KEY:-}
       MIABI_WEB_URL: ${MIABI_WEB_URL:-}
       MIABI_CORS_ORIGINS: ${MIABI_WEB_URL:-*}
       MIABI_CONTROL_URL: ${MIABI_WEB_URL:-}
