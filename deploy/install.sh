@@ -27,7 +27,7 @@
 #   ASSUME_YES                  set to 1 to skip interactive prompts (placeholders)
 #
 # Answering the prompts over a pipe is unreliable, so prefer passing the values:
-#   curl -fsSL .../install.sh | sudo MIABI_DOMAIN=panel.example.com \
+#   curl -fsSL .../install.sh | sudo MIABI_DOMAIN=miabi.example.com \
 #     MIABI_ACME_EMAIL=you@example.com bash
 #
 # Install or downgrade to a specific release:
