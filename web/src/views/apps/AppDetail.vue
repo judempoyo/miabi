@@ -341,6 +341,10 @@ const registries = ref<Registry[]>([])
 const gitRepos = ref<GitRepository[]>([])
 const networks = ref<Network[]>([])
 const stacks = ref<Stack[]>([])
+// The workspace networks the app is attached to (always including the workspace
+// default). In cluster mode these are Swarm overlays, which is what lets the app
+// reach a database on another node.
+const attachedNets = computed<Network[]>(() => app.value?.networks ?? [])
 interface SettingsForm {
   image: string; tag: string; command: string; registry_id: number | null; git_repository_id: number | null
   git_repo: string; git_ref: string; build_method: BuildMethod; builder: string
@@ -1761,6 +1765,40 @@ async function detachDatabase(d: AppDatabase) {
         </div>
       </div>
 
+      <!-- Which workspace networks the app is attached to. The default network is
+           always one of them, and in cluster mode it is a Swarm overlay — which is
+           what lets the app reach a database on another node. -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <h2>Networks</h2>
+          <span class="text-muted text-sm">Workspace networks this app is reachable on.</span>
+        </div>
+        <div v-if="attachedNets.length === 0" class="card-body text-muted text-sm">
+          Not connected to any network yet.
+        </div>
+        <div v-else class="table-wrapper">
+          <table>
+            <thead><tr><th>Network</th><th>Docker name</th><th>Driver</th></tr></thead>
+            <tbody>
+              <tr v-for="n in attachedNets" :key="n.id">
+                <td class="cell-title">
+                  {{ n.name }}
+                  <span v-if="n.is_default" class="badge badge-info" style="margin-left: 6px">default</span>
+                </td>
+                <td class="cell-sub mono">{{ n.docker_name }}</td>
+                <td class="cell-sub">
+                  {{ n.driver }}<span v-if="n.internal"> · internal</span>
+                  <span v-if="n.driver === 'overlay'" class="text-muted"> · spans nodes</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card-body text-muted text-sm" style="padding-top: 0">
+          Attach or detach networks in <a class="net-link" @click="tab = 'settings'">Settings</a>.
+        </div>
+      </div>
+
       <div class="card mb-4">
         <div class="card-header"><h2>Container IP</h2></div>
         <div class="card-body" style="padding-bottom: 4px">
@@ -1769,7 +1807,14 @@ async function detachDatabase(d: AppDatabase) {
             redeploy, so use the hostname for anything persistent.
           </p>
         </div>
-        <div v-if="liveStatus?.networks?.length" class="table-wrapper">
+        <!-- A replicated service has no single container IP: Swarm may run its tasks
+             on any node, and they are replaced on every update. Say that, rather than
+             falling through to "no IP yet", which reads as broken for a healthy app. -->
+        <div v-if="isService" class="card-body text-muted text-sm" style="padding-top: 0">
+          A replicated service has no single container IP — its tasks can run on any node and are
+          replaced on each update. Use the hostname above; Swarm load-balances it across the replicas.
+        </div>
+        <div v-else-if="liveStatus?.networks?.length" class="table-wrapper">
           <table>
             <thead><tr><th>Network</th><th>IP address</th><th>Gateway</th><th></th></tr></thead>
             <tbody>

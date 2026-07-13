@@ -200,6 +200,10 @@ export interface PlaceableNode {
   is_local: boolean
   online: boolean
   cordoned: boolean
+  // The node's id within the swarm; empty when it is not a member. A service app
+  // is placed by the Swarm scheduler (which ignores server_id), so pinning one to
+  // a node means emitting a `node.id==<swarm_node_id>` placement constraint.
+  swarm_node_id?: string
 }
 
 // A physical GPU discovered on a node. Admin policy (enabled, shared) is applied

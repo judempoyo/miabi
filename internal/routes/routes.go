@@ -308,6 +308,17 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	networkService := network.NewService(networkRepo, dockerClient)
 	networkService.SetQuota(quotaService)
 	networkService.SetAllocator(subnetAllocator)
+	// Cluster mode: a workspace network is a swarm overlay (spans nodes) instead of
+	// a node-local bridge, and existing bridges are converted when the admin enables
+	// cluster networking. Off (the single-node default), everything stays a bridge.
+	networkService.SetCluster(clusterService)
+	networkService.SetClients(nodeManager.Clients())
+	networkService.SetMigrationDeps(serverRepo, repositories.NewDatabaseRepository(db))
+	clusterService.SetNetworkMigrator(
+		func(ctx context.Context) error { _, err := networkService.Migrate(ctx); return err },
+		func(ctx context.Context) error { _, err := networkService.Rollback(ctx); return err },
+		func() int { n, _ := networkService.PendingMigration(); return n },
+	)
 	workspaceService := workspace.NewService(workspaceRepo, userRepo, networkService)
 	workspaceService.SetPlans(planRepo)
 	workspaceService.SetQuota(quotaService)
@@ -386,6 +397,10 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	// `docker compose up -d` can't leave clustered apps publicly dark), plus once now
 	// so a fresh boot doesn't wait a whole refresh interval.
 	clusterService.SetIngressReconciler(proxyReconciler.ReconcileIngressGateway)
+	// In cluster mode the gateway reaches a remote app over the ingress overlay by
+	// its DNS alias, so no host port is published for it — and canary weights, which
+	// the port-forward upstream cannot carry, start working on remote nodes.
+	routeService.SetCluster(clusterService)
 	go func() { _ = proxyReconciler.ReconcileIngressGateway(context.Background()) }()
 	// Auto port-forwarding: when a port-forward app gains a route, redeploy it so
 	// the node actually publishes the allocated host port the gateway targets.
@@ -557,6 +572,19 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 		platformimage.KeyRelay: cfg.ForwardRelayImage,
 	})
 	databaseService.SetImageResolver(imageResolver)
+	// The network check runs socat probe containers on each node; it reuses the
+	// port-forward relay image rather than introducing another one to pull.
+	clusterService.SetNetCheckImage(imageResolver, cfg.ForwardRelayImage)
+	// The global agent service: Swarm carries the agent to every worker, each agent
+	// registers itself from the swarm node id its own engine reports, and the manager
+	// verifies that id against its own membership before trusting the shared token.
+	clusterService.SetAgentDeps(
+		cluster.NewSettingsTokenStore(repositories.NewSettingRepository(db)),
+		nodeService,
+		cfg.ControlURL,
+		imageResolver,
+		"miabi/agent:latest", // fallback only; the image catalog is the source of truth
+	)
 	backupService.SetImageResolver(imageResolver)
 	backupService.SetLogStore(logStore) // externalize backup run logs to the shared store
 	// Volume backup: archives a volume to the workspace S3 target (volume-bkup).
@@ -841,7 +869,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 			dnsProvider:    handlers.NewDNSProviderHandler(dnsProviderService, auditLogger),
 			middleware:     handlers.NewMiddlewareHandler(middlewareService, auditLogger),
 			portBinding:    handlers.NewPortBindingHandler(portBindingService, auditLogger),
-			database:       handlers.NewDatabaseHandler(databaseService, appService, forwardService, secretService, userRepo, auditLogger),
+			database:       handlers.NewDatabaseHandler(databaseService, appService, forwardService, secretService, userRepo, auditLogger, clusterService),
 			job:            handlers.NewJobHandler(jobService, auditLogger),
 			secret:         handlers.NewSecretHandler(secretService, auditLogger),
 			certificate:    handlers.NewCertificateHandler(certificateService, auditLogger),

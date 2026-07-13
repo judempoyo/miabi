@@ -12,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jkaninda/logger"
 	"github.com/miabi-io/miabi/internal/docker"
 	"github.com/miabi-io/miabi/internal/dotenv"
 	"github.com/miabi-io/miabi/internal/hostmount"
 	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/nodes"
 	"github.com/miabi-io/miabi/internal/services/crypto"
 	"github.com/miabi-io/miabi/internal/services/events"
 	"github.com/miabi-io/miabi/internal/services/node"
@@ -199,6 +201,9 @@ func (s *Service) SetWorkspaceInfo(w WorkspaceInfo) { s.workspaces = w }
 type NodeDocker interface {
 	For(serverID uint) (docker.Client, error)
 	LocalID() uint
+	// ForServiceTask finds the engine holding a swarm service's task container.
+	// A service has no fixed node, and only the node running the task can see it.
+	ForServiceTask(ctx context.Context, serviceName string) (docker.Client, string, error)
 }
 
 // NodeGuard validates that a node can accept a new placement (exists, not
@@ -605,11 +610,23 @@ func (s *Service) serviceLiveStatus(ctx context.Context, app *models.Application
 	default:
 		ls.Status = "starting"
 	}
-	// A resource snapshot from one running task container (on the manager), so the
-	// overview shows live CPU/memory for cluster apps too.
+	// Uptime comes from the swarm control plane (the task's running-since timestamp),
+	// not from inspecting a container — the task may sit on a node Miabi has no
+	// Docker client for, where there is nothing to inspect. Without this a healthy
+	// service showed no "running since" at all.
+	ls.StartedAt = st.StartedAt
+	if ls.Running && ls.StartedAt != "" {
+		if t, perr := time.Parse(time.RFC3339Nano, ls.StartedAt); perr == nil {
+			ls.UptimeSeconds = int64(time.Since(t).Seconds())
+		}
+	}
+	// A resource snapshot from a running task's container. Stats have no
+	// manager-side equivalent (there is no `docker service stats`), so this only
+	// works when the task landed on a node Miabi has a client for; on an unmanaged
+	// swarm member it is silently absent, and the rest of the status still holds.
 	if ls.Running {
-		if cid, cerr := mgr.ServiceTaskContainerID(ctx, node.AppAlias(app)); cerr == nil {
-			if sample, serr := mgr.StatsOnce(ctx, cid); serr == nil {
+		if dc, cid, cerr := s.clients.ForServiceTask(ctx, node.AppAlias(app)); cerr == nil {
+			if sample, serr := dc.StatsOnce(ctx, cid); serr == nil {
 				ls.Stats = &sample
 			}
 		}
@@ -821,12 +838,34 @@ func (s *Service) Create(workspaceID uint, in CreateInput) (*models.Application,
 	return app, nil
 }
 
-// SetNetworks attaches the given workspace networks to the app, always
-// including the workspace's default network.
+// SetNetworks attaches the given workspace networks to the app, always including the
+// workspace's default network.
+//
+// The default is not optional garnish: it is the network the app shares with its
+// databases, and in cluster mode it is the workspace's Swarm overlay — the thing that
+// lets it reach a database on another node. An app that ends up on none deploys
+// perfectly happily and then cannot resolve anything, with nothing to say why.
+//
+// So a missing default is repaired rather than tolerated. That path is reachable for a
+// workspace that predates default networks, or one whose network was removed out of
+// band — and it matters most for callers that never name a network at all, like GitOps,
+// where the default is the only network the app was ever going to get.
 func (s *Service) SetNetworks(app *models.Application, networkIDs []uint) error {
 	all, err := s.networks.ListByWorkspace(app.WorkspaceID)
 	if err != nil {
 		return err
+	}
+	if !hasDefaultNetwork(all) && s.netEnsurer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		def, derr := s.netEnsurer.EnsureDefault(ctx, app.WorkspaceID)
+		switch {
+		case derr != nil:
+			logger.Warn("could not ensure the workspace's default network; the app will have none",
+				"workspace", app.WorkspaceID, "app", app.Name, "error", derr)
+		case def != nil:
+			all = append(all, *def)
+		}
 	}
 	want := map[uint]bool{}
 	for _, id := range networkIDs {
@@ -839,6 +878,15 @@ func (s *Service) SetNetworks(app *models.Application, networkIDs []uint) error 
 		}
 	}
 	return s.apps.ReplaceNetworks(app, selected)
+}
+
+func hasDefaultNetwork(nets []models.Network) bool {
+	for i := range nets {
+		if nets[i].IsDefault {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Get(workspaceID, id uint) (*models.Application, error) {
@@ -1131,6 +1179,15 @@ func clamp(v, lo, hi int) int {
 // container to attach a shell to.
 var ErrNoActiveContainer = errors.New("application has no active container")
 
+// ErrTaskOnUnmanagedNode is the user-facing form of nodes.ErrTaskUnreachable: the
+// app IS running, but on a swarm node with no Miabi agent, so there is no engine to
+// open a shell or read processes through. Docker offers no manager-side equivalent
+// of exec, so this is a hard limit, not a bug. Logs are unaffected — the manager
+// aggregates those.
+var ErrTaskOnUnmanagedNode = errors.New(
+	"this app's task runs on a swarm node with no Miabi agent, so a shell cannot be opened. " +
+		"Add the node to Miabi (install the agent) to use exec")
+
 // EnsureExecAllowed returns a CapabilityDenied error when the workspace's plan
 // does not permit opening an interactive shell into a container. Nil-safe on a
 // disabled quota service (returns nil).
@@ -1172,21 +1229,22 @@ func (s *Service) activeContainerID(appID uint) (string, error) {
 
 // runtimeContainerID resolves a container to inspect/exec/stream for the app and
 // the Docker client that owns it. For a container app it's the active release's
-// container on the app's node; for a cluster (service) app it's a running task
-// container of its Swarm service, resolved on the manager. Returns
-// ErrNoActiveContainer when nothing is running (e.g. a service task scheduled
-// onto another node, which this single-manager resolver does not yet reach).
+// container on the app's node; for a cluster (service) app it's a running task of
+// its Swarm service, on whichever node the scheduler placed it.
+//
+// Returns ErrTaskOnUnmanagedNode when a service is running but its node has no
+// Miabi agent, and ErrNoActiveContainer when nothing is running at all.
 func (s *Service) runtimeContainerID(ctx context.Context, app *models.Application) (string, docker.Client, error) {
 	if app.RuntimeKind == models.RuntimeService {
-		mgr, err := s.clients.For(0)
-		if err != nil {
-			return "", nil, err
-		}
-		cid, err := mgr.ServiceTaskContainerID(ctx, node.AppAlias(app))
-		if err != nil {
+		dc, cid, err := s.clients.ForServiceTask(ctx, node.AppAlias(app))
+		switch {
+		case err == nil:
+			return cid, dc, nil
+		case errors.Is(err, nodes.ErrTaskUnreachable):
+			return "", nil, ErrTaskOnUnmanagedNode
+		default:
 			return "", nil, ErrNoActiveContainer
 		}
-		return cid, mgr, nil
 	}
 	cid, err := s.activeContainerID(app.ID)
 	if err != nil {
