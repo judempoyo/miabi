@@ -70,6 +70,27 @@ func (h *ClusterHandler) Disable(c *okapi.Context) error {
 	return message(c, "cluster mode disabled")
 }
 
+// ApplyNetworking converts the workspace networks still on node-local bridges into
+// swarm overlays, so apps and databases reach each other across nodes.
+//
+// Enable already does this on the transition into cluster mode. This is the
+// explicit action for an install that was ALREADY clustered when it upgraded (it
+// never saw that transition, so its workspaces are still on per-node islands), and
+// for re-running the conversion after a node that was offline comes back.
+//
+// It briefly drops in-flight connections inside each workspace; containers are not
+// restarted.
+func (h *ClusterHandler) ApplyNetworking(c *okapi.Context) error {
+	if err := h.cluster.ApplyNetworking(c.Request().Context()); err != nil {
+		if errors.Is(err, cluster.ErrNotEnabled) {
+			return c.AbortBadRequest("cluster mode is not enabled")
+		}
+		return c.AbortInternalServerError("failed to apply cluster networking", err)
+	}
+	h.record(c, "cluster.network.apply", 0)
+	return ok(c, h.cluster.Status())
+}
+
 // Members lists the swarm's nodes (docker node ls), annotated with whether each
 // maps to a managed Miabi node. Drives the manager detail page's cluster view.
 func (h *ClusterHandler) Members(c *okapi.Context) error {

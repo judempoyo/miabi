@@ -54,6 +54,28 @@ const clusterBusy = ref(false)
 const showEnable = ref(false)
 const advertiseAddr = ref('')
 
+// Workspace networks still on node-local bridges. While cluster mode is on, these
+// workspaces have NO cross-node connectivity: their apps and databases sit on
+// per-node islands, and an app on one node cannot resolve a database on another.
+// Normal for an install that was already clustered before this version — the
+// conversion only runs on the enable transition — so it must be applied explicitly.
+const networksPending = computed(() => cluster.value?.networks_pending ?? 0)
+const showApplyNetworking = ref(false)
+
+async function applyNetworking() {
+  showApplyNetworking.value = false
+  clusterBusy.value = true
+  try {
+    cluster.value = (await clusterApi.applyNetworking()).data.data
+    notify.success('Workspace networks converted to cluster overlays')
+    load()
+  } catch (e) {
+    notify.apiError(e, 'Failed to apply cluster networking')
+  } finally {
+    clusterBusy.value = false
+  }
+}
+
 async function loadCluster() {
   try {
     cluster.value = (await clusterApi.status()).data.data
@@ -357,6 +379,21 @@ function swarmClass(n: Server): string {
               <span class="mdi mdi-content-copy"></span>
             </button>
           </div>
+          <!-- Cluster mode is on, but some workspaces are still on node-local
+               bridges, so they have no cross-node connectivity at all. Say exactly
+               that, rather than leaving the admin to discover it as an app that
+               can't resolve its database. -->
+          <div v-if="clusterEnabled && networksPending > 0" class="pending-hint">
+            <span class="mdi mdi-alert-outline"></span>
+            <span>
+              <strong>{{ networksPending }} workspace network(s) are still node-local bridges.</strong>
+              Apps and databases in them can't reach each other across nodes — an app on one node
+              won't resolve a database on another. Convert them to cluster overlays to fix it.
+            </span>
+            <button type="button" class="btn btn-sm btn-primary" :disabled="clusterBusy" @click="showApplyNetworking = true">
+              Apply cluster networking
+            </button>
+          </div>
         </div>
       </div>
       <div>
@@ -584,9 +621,19 @@ function swarmClass(n: Server): string {
     </Teleport>
 
     <ConfirmDialog
+      :open="showApplyNetworking"
+      title="Apply cluster networking?"
+      message="Each workspace network is converted from a node-local bridge to a cluster overlay, so apps and databases reach each other across nodes. Containers are NOT restarted, but connections open inside a workspace drop briefly while it switches over."
+      confirm-label="Apply"
+      :busy="clusterBusy"
+      @confirm="applyNetworking"
+      @cancel="showApplyNetworking = false"
+    />
+
+    <ConfirmDialog
       :open="showDisableCluster"
       title="Disable cluster mode?"
-      message="The manager and all member nodes will leave the swarm. Apps running as plain containers are unaffected."
+      message="The manager and all member nodes will leave the swarm. Workspace networks are moved back to node-local bridges first, so apps and databases stop being reachable across nodes — anything relying on that will break. Containers are not restarted."
       confirm-label="Disable cluster"
       variant="danger"
       :busy="clusterBusy"
@@ -644,6 +691,23 @@ function swarmClass(n: Server): string {
 .ingress-cmd {
   font-family: var(--font-mono, monospace);
   user-select: all;
+}
+.pending-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--warning-border, #f5c26b);
+  border-radius: 6px;
+  background: var(--warning-bg, rgba(245, 194, 107, 0.12));
+  font-size: 12px;
+  color: var(--text);
+}
+.pending-hint > span:first-child {
+  color: var(--warning, #b45309);
+  font-size: 16px;
 }
 .header-actions {
   display: inline-flex;

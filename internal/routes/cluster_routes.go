@@ -61,6 +61,14 @@ func (r *Router) clusterRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodPost,
+			Path:        "/network/apply",
+			Group:       g,
+			Middlewares: admin,
+			Handler:     r.h.cluster.ApplyNetworking,
+			Summary:     "Convert workspace networks to cluster overlays (cross-node east-west)",
+		},
+		{
+			Method:      http.MethodPost,
 			Path:        "/nodes/{nodeID}/join",
 			Group:       g,
 			Middlewares: admin,

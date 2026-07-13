@@ -22,6 +22,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/events"
 	"github.com/miabi-io/miabi/internal/services/gitrepo"
 	imagesvc "github.com/miabi-io/miabi/internal/services/image"
+	"github.com/miabi-io/miabi/internal/services/network"
 	"github.com/miabi-io/miabi/internal/services/node"
 	"github.com/miabi-io/miabi/internal/services/platformimage"
 	runnersvc "github.com/miabi-io/miabi/internal/services/runner"
@@ -514,6 +515,46 @@ func (h *DeployHandler) manager() docker.Client {
 	return dc
 }
 
+// serviceNetworks resolves the swarm-scoped networks a service attaches to: the
+// app's workspace networks, which in cluster mode are overlays shared with the
+// workspace's databases and container apps. Each is ensured on the manager
+// (create-or-reuse); an overlay is swarm-scoped, so Docker materializes it on a
+// worker as soon as a task lands there.
+//
+// A node-local bridge cannot be attached to a swarm service, and a service that
+// silently comes up on the wrong network looks healthy while failing to resolve
+// its own database — so a workspace still on bridges is a hard, explanatory
+// failure rather than a broken deploy.
+func (h *DeployHandler) serviceNetworks(ctx context.Context, mgr docker.Client, app *models.Application) ([]string, error) {
+	if len(app.Networks) == 0 {
+		return nil, fmt.Errorf("app %q has no workspace network to attach to", app.Name)
+	}
+	out := make([]string, 0, len(app.Networks))
+	for i := range app.Networks {
+		n := app.Networks[i]
+		if n.Driver != network.DriverOverlay {
+			return nil, fmt.Errorf(
+				"workspace network %q is a node-local bridge, which a replicated service cannot join. "+
+					"Enable cluster networking so workspace networks become overlays — otherwise this service "+
+					"could not reach its databases", n.Name)
+		}
+		// Carve the subnet from the Miabi pool (as bridges do) so swarm's own address
+		// pool can't exhaust; fall back to swarm defaults when the allocator is unset.
+		spec := docker.NetworkSpec{Name: n.DockerName, Driver: network.DriverOverlay, Attachable: true, Encrypted: true, Internal: n.Internal}
+		var err error
+		if h.alloc != nil {
+			_, _, err = h.alloc.EnsureManaged(ctx, mgr, spec, 0, models.NetAllocKindOverlay)
+		} else {
+			_, err = mgr.EnsureNetworkSpec(ctx, spec)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("ensure overlay network %s: %w", n.DockerName, err)
+		}
+		out = append(out, n.DockerName)
+	}
+	return out, nil
+}
+
 // deployService deploys (or updates in place) a cluster app as a replicated
 // Swarm service. Swarm performs the rolling task replacement, so there is no
 // previous container to retire. The service joins two overlays: its per-workspace
@@ -533,19 +574,17 @@ func (h *DeployHandler) deployService(ctx context.Context, app *models.Applicati
 	_ = h.deployments.Update(dep)
 	h.publishStatus(dep, models.DeploymentDeploying)
 
-	// Per-workspace overlay network (attachable, encrypted) — east-west DNS + VIP.
-	// Carve its subnet from the Miabi pool (like bridges) so swarm's own address
-	// pool can't exhaust; falls back to swarm defaults when the allocator is unset.
-	overlay := node.WorkspaceOverlay(app.WorkspaceID)
-	overlaySpec := docker.NetworkSpec{Name: overlay, Driver: "overlay", Attachable: true, Encrypted: true}
-	var overlayErr error
-	if h.alloc != nil {
-		_, _, overlayErr = h.alloc.EnsureManaged(ctx, mgr, overlaySpec, 0, models.NetAllocKindOverlay)
-	} else {
-		_, overlayErr = mgr.CreateOverlayNetwork(ctx, overlay)
-	}
-	if overlayErr != nil {
-		_ = h.fail(dep, fmt.Errorf("ensure overlay network: %w", overlayErr))
+	// The app's workspace networks — the SAME networks the workspace's databases and
+	// container apps are on. In cluster mode they are swarm overlays (attachable,
+	// encrypted), so a service reaches a database by its DNS alias on any node.
+	//
+	// This used to attach a service-only overlay (node.WorkspaceOverlay) that
+	// nothing else ever joined: a service could talk to other services, but its own
+	// database — a plain container on the workspace network — was in a different DNS
+	// namespace entirely, so the alias simply did not resolve.
+	svcNets, nerr := h.serviceNetworks(ctx, mgr, app)
+	if nerr != nil {
+		_ = h.fail(dep, nerr)
 		return
 	}
 
@@ -625,7 +664,7 @@ func (h *DeployHandler) deployService(ctx context.Context, app *models.Applicati
 		Env:            env,
 		Cmd:            cmd,
 		Replicas:       replicas,
-		Networks:       []string{overlay},
+		Networks:       svcNets,
 		NetworkAliases: []string{alias, app.Name},
 		// Also join the shared ingress overlay, but register only the globally-unique
 		// upstream alias there (never app.Name, which is workspace-scoped) — that is

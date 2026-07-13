@@ -15,6 +15,13 @@ export const clusterApi = {
   enable: (advertiseAddr: string) =>
     api.post<ApiResponse<ClusterStatus>>('/admin/cluster/enable', { advertise_addr: advertiseAddr }),
   disable: () => api.post<ApiResponse<{ message: string }>>('/admin/cluster/disable'),
+  // Convert workspace networks still on node-local bridges into cluster overlays,
+  // so apps and databases reach each other across nodes. Enable already does this
+  // on the transition into cluster mode; this is the explicit action for an install
+  // that was already clustered when it upgraded, or to re-run it after a node that
+  // was offline comes back. Containers are not restarted, but in-flight connections
+  // inside each workspace drop briefly.
+  applyNetworking: () => api.post<ApiResponse<ClusterStatus>>('/admin/cluster/network/apply'),
   joinNode: (nodeId: number) =>
     api.post<ApiResponse<{ message: string }>>(`/admin/cluster/nodes/${nodeId}/join`),
   leaveNode: (nodeId: number) =>

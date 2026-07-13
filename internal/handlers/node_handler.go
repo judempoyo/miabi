@@ -153,6 +153,12 @@ type PlaceableNode struct {
 	IsLocal      bool   `json:"is_local"`
 	Online       bool   `json:"online"`
 	Cordoned     bool   `json:"cordoned"`
+	// SwarmNodeID is the node's id within the swarm, empty when it is not a member.
+	// A container app is placed by server_id, but a *service* app is placed by the
+	// Swarm scheduler, which ignores server_id entirely — pinning one to a node
+	// means emitting a `node.id==<SwarmNodeID>` placement constraint, so the picker
+	// needs this to offer the choice at all.
+	SwarmNodeID string `json:"swarm_node_id,omitempty"`
 }
 
 // ListPlaceable returns the nodes a resource can be placed on, for the create
@@ -173,6 +179,7 @@ func (h *NodeHandler) ListPlaceable(c *okapi.Context) error {
 			IsLocal:      s.IsLocal,
 			Online:       s.IsLocal || h.manager.Connected(s.ID),
 			Cordoned:     s.Cordoned,
+			SwarmNodeID:  s.SwarmNodeID,
 		})
 	}
 	return ok(c, out)

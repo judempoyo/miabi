@@ -84,13 +84,35 @@ type Service struct {
 	// the overlays die with the swarm, so every workspace must be back on a bridge
 	// first or it would be left pointing at a network that no longer exists.
 	networkRollback func(context.Context) error
+	// networkPending reports how many workspace networks are still node-local
+	// bridges — non-zero in cluster mode means cross-node east-west is not working
+	// for them yet, and the admin must apply cluster networking. Optional.
+	networkPending func() int
 }
 
 // SetNetworkMigrator wires the workspace-network driver conversion: `migrate`
-// (bridge -> overlay) runs on Enable, `rollback` (overlay -> bridge) on Disable.
+// (bridge -> overlay) runs on Enable, `rollback` (overlay -> bridge) on Disable,
+// and `pending` reports how many workspaces are still on node-local bridges.
 // Nil-safe; nil leaves networks on whatever driver they already have.
-func (s *Service) SetNetworkMigrator(migrate, rollback func(context.Context) error) {
-	s.networkMigrator, s.networkRollback = migrate, rollback
+func (s *Service) SetNetworkMigrator(migrate, rollback func(context.Context) error, pending func() int) {
+	s.networkMigrator, s.networkRollback, s.networkPending = migrate, rollback, pending
+}
+
+// ApplyNetworking converts workspace networks to overlays on demand.
+//
+// Enable already does this, but only on the *transition* into cluster mode. An
+// install that was already clustered when it upgraded never sees that transition,
+// so its workspaces stay on node-local bridges and cross-node east-west silently
+// does not work. This is the explicit action that fixes them — and the one the
+// admin re-runs if a node was offline during the first attempt.
+func (s *Service) ApplyNetworking(ctx context.Context) error {
+	if !s.CapCluster() {
+		return ErrNotEnabled
+	}
+	if s.networkMigrator == nil {
+		return errors.New("workspace-network migration is not wired")
+	}
+	return s.networkMigrator(ctx)
 }
 
 // migrateNetworks converts workspace bridges to overlays now that swarm is up.
@@ -152,7 +174,14 @@ type Status struct {
 	// admin running their own reverse proxy can attach it by hand:
 	//   docker network connect <ingress_network> <their-proxy-container>
 	IngressNetwork string `json:"ingress_network,omitempty"`
-	Error          string `json:"error,omitempty"`
+	// NetworksPending is how many workspace networks are still node-local bridges.
+	// Non-zero while cluster mode is on means cross-node east-west does NOT work for
+	// those workspaces — their apps and databases sit on per-node islands. It is the
+	// normal state for an install that was already clustered when it upgraded, since
+	// the conversion only runs on the enable transition. The Nodes page uses this to
+	// prompt for "Apply cluster networking".
+	NetworksPending int    `json:"networks_pending,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // Status returns the last-refreshed cluster status.
@@ -172,6 +201,9 @@ func (s *Service) Status() Status {
 	// tell an admin how to attach a self-managed reverse proxy to it.
 	if st.Enabled {
 		st.IngressNetwork = node.IngressOverlay
+		if s.networkPending != nil {
+			st.NetworksPending = s.networkPending()
+		}
 	}
 	return st
 }

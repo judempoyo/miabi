@@ -316,6 +316,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	clusterService.SetNetworkMigrator(
 		func(ctx context.Context) error { _, err := networkService.Migrate(ctx); return err },
 		func(ctx context.Context) error { _, err := networkService.Rollback(ctx); return err },
+		func() int { n, _ := networkService.PendingMigration(); return n },
 	)
 	workspaceService := workspace.NewService(workspaceRepo, userRepo, networkService)
 	workspaceService.SetPlans(planRepo)

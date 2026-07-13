@@ -1465,6 +1465,12 @@ export interface ClusterStatus {
   // Set only when cluster mode is on; used to tell an admin running their own
   // proxy how to attach it (docker network connect <ingress_network> <proxy>).
   ingress_network?: string
+  // How many workspace networks are still node-local bridges. Non-zero while
+  // cluster mode is on means cross-node east-west does NOT work for those
+  // workspaces — their apps and databases sit on per-node islands. Normal for an
+  // install that was already clustered when it upgraded, since the conversion only
+  // runs on the enable transition; the admin applies it explicitly.
+  networks_pending?: number
   error?: string
 }
 

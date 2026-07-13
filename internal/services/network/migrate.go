@@ -84,6 +84,19 @@ func (s *Service) Migrate(ctx context.Context) (MigrationReport, error) {
 	return s.convertAll(ctx, DriverBridge, DriverOverlay)
 }
 
+// PendingMigration counts the workspace networks still on a node-local bridge.
+//
+// Non-zero in cluster mode means cross-node east-west does not work yet: those
+// workspaces' apps and databases are on per-node islands. That is the normal state
+// for an install that was ALREADY in cluster mode when it upgraded to this version
+// — Migrate only runs on the enable transition, so nothing has converted it. The
+// admin applies it explicitly (cluster.ApplyNetworking); the UI surfaces this count
+// to tell them they need to.
+func (s *Service) PendingMigration() (int, error) {
+	nets, err := s.repo.ListByDriver(DriverBridge)
+	return len(nets), err
+}
+
 // Rollback converts every overlay-backed workspace network back into a node-local
 // bridge. It must run *before* the manager leaves the swarm — once swarm is gone
 // the overlays go with it, and every workspace would be left pointing at a network
