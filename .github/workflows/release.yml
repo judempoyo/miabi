@@ -212,3 +212,39 @@ jobs:
             deploy/install.sh \
             deploy/install-agent.sh \
             --clobber
+
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Guard: never publish a release whose installer asset is missing or
+          # truncated. Better a stuck draft than a public 404.
+          for f in install.sh install-agent.sh; do
+            size="$(gh release view "${GITHUB_REF_NAME}" \
+                      --json assets \
+                      --jq ".assets[] | select(.name==\"${f}\") | .size" || true)"
+            [ -n "$size" ] && [ "$size" -gt 1000 ] \
+              || { echo "::error::${f} is missing or too small (${size:-0} bytes) — refusing to publish"; exit 1; }
+            echo "  ok ${f} (${size} bytes)"
+          done
+
+          gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
+          echo "::notice::Published ${GITHUB_REF_NAME} — /releases/latest now serves its installers."
+
+      - name: Verify the published one-liner
+        if: ${{ !contains(github.ref_name, '-') }}   # skip for pre-releases (not 'latest')
+        run: |
+          set -euo pipefail
+          url="https://github.com/miabi-io/miabi/releases/latest/download/install.sh"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL "$url" -o /tmp/install.sh; then break; fi
+            echo "  waiting for the asset CDN (attempt ${attempt}/5)"; sleep 10
+          done
+          [ -s /tmp/install.sh ] || { echo "::error::${url} did not serve install.sh"; exit 1; }
+          bash -n /tmp/install.sh
+          grep -qF "MIABI_VERSION=\"\${MIABI_VERSION:-${GITHUB_REF_NAME}}\"" /tmp/install.sh \
+            || { echo "::error::the published installer does not pin ${GITHUB_REF_NAME}"; exit 1; }
+          echo "::notice::curl -fsSL https://get.miabi.io | sudo bash  →  ${GITHUB_REF_NAME}  ✓"
