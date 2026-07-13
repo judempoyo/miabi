@@ -1484,6 +1484,70 @@ export interface ClusterJoinInstructions {
 
 // ClusterMember is one swarm node (docker node ls), annotated with the Miabi
 // node it maps to (or unmanaged when it has no Miabi record).
+// Preflight: what this host can and cannot do BEFORE cluster mode is turned on.
+// The blocker case is a Docker engine running inside a VM (Docker Desktop, OrbStack):
+// the swarm forms and DNS resolves, then every cross-node connection times out,
+// because VXLAN and IPSec cannot be forwarded into the VM.
+export interface ClusterFinding {
+  severity: 'blocker' | 'warning' | 'info'
+  title: string
+  detail: string
+}
+export interface ClusterFirewallRule {
+  port: string
+  purpose: string
+}
+export interface ClusterPreflight {
+  engine_os: string
+  // False when this engine cannot carry the overlay data plane to other hosts at
+  // all. Single-node cluster mode still works.
+  multi_node_capable: boolean
+  findings: ClusterFinding[]
+  firewall: ClusterFirewallRule[]
+}
+
+// NetCheck probes the real overlay between every pair of nodes, separating the three
+// failures that look identical from inside an app: a name that will not resolve, a
+// connection that never completes, and a payload that dies silently at the MTU.
+export interface NetCheckProbe {
+  server_id: number
+  node_name: string
+  reachable: boolean
+  error?: string
+}
+export interface NetCheckResult {
+  from: string
+  to: string
+  dns: boolean
+  tcp: boolean
+  payload: boolean // a 1400-byte body round-tripped
+  ip?: string
+  error?: string
+  verdict: string
+}
+export interface NetCheck {
+  network: string
+  probes: NetCheckProbe[]
+  results: NetCheckResult[]
+  ok: boolean
+  summary: string
+}
+
+// A service task the scheduler placed on a node. Only the manager can enumerate
+// these — the container lives on the node, which Miabi may have no client for.
+export interface SwarmTask {
+  id: string
+  service_name: string
+  node_id: string
+  image?: string
+  slot?: number
+  state: string
+  desired_state: string
+  message?: string
+  error?: string
+  updated_at?: string
+}
+
 export interface ClusterMember {
   id: string
   hostname: string

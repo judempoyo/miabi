@@ -5,6 +5,8 @@ package docker
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/filters"
@@ -60,6 +62,22 @@ type SwarmNode struct {
 	// Tasks is how many service tasks the scheduler currently runs here — the node's
 	// load. Populated by SwarmNodes; 0 for an idle node.
 	Tasks int `json:"tasks"`
+}
+
+// SwarmTask is one task (a container the scheduler placed) of a service, as seen
+// from a manager. It is how a node's real workload is enumerated: the container
+// itself lives on the node, which Miabi may hold no Docker client for.
+type SwarmTask struct {
+	ID           string `json:"id"`
+	ServiceName  string `json:"service_name"`
+	NodeID       string `json:"node_id"`
+	Image        string `json:"image,omitempty"`
+	Slot         int    `json:"slot,omitempty"`
+	State        string `json:"state"`         // running | preparing | failed | …
+	DesiredState string `json:"desired_state"` // running | shutdown
+	Message      string `json:"message,omitempty"`
+	Err          string `json:"error,omitempty"`
+	UpdatedAt    string `json:"updated_at,omitempty"` // RFC3339
 }
 
 // SwarmJoinTokens are the secrets a node uses to join a swarm in either role.
@@ -227,4 +245,79 @@ func (e *engineClient) swarmTaskCounts(ctx context.Context) map[string]int {
 // left. Used to keep the Nodes page free of stale "down" entries.
 func (e *engineClient) SwarmNodeRemove(ctx context.Context, nodeID string, force bool) error {
 	return e.cli.NodeRemove(ctx, nodeID, types.NodeRemoveOptions{Force: force})
+}
+
+// SwarmNodeAvailability sets a node's scheduling availability. Requires a manager.
+//
+//	active — the scheduler may place new tasks here
+//	pause  — existing tasks keep running; no new ones are placed
+//	drain  — existing tasks are rescheduled off this node, and none are placed
+//
+// Drain is what makes a node safe to reboot: without it Swarm keeps scheduling onto
+// a host that is about to disappear.
+//
+// The update is version-checked (Docker's optimistic concurrency), so it is
+// re-inspected immediately before writing rather than trusting a cached version.
+func (e *engineClient) SwarmNodeAvailability(ctx context.Context, nodeID, availability string) error {
+	var av swarm.NodeAvailability
+	switch availability {
+	case string(swarm.NodeAvailabilityActive):
+		av = swarm.NodeAvailabilityActive
+	case string(swarm.NodeAvailabilityPause):
+		av = swarm.NodeAvailabilityPause
+	case string(swarm.NodeAvailabilityDrain):
+		av = swarm.NodeAvailabilityDrain
+	default:
+		return fmt.Errorf("unsupported availability %q (want active, pause or drain)", availability)
+	}
+	n, _, err := e.cli.NodeInspectWithRaw(ctx, nodeID)
+	if err != nil {
+		return wrapNotFound(err)
+	}
+	spec := n.Spec
+	spec.Availability = av
+	return e.cli.NodeUpdate(ctx, nodeID, n.Version, spec)
+}
+
+// SwarmTasks lists the swarm's tasks, optionally filtered to one node. Requires a
+// manager. Only the manager can enumerate these: the containers live on the nodes,
+// which Miabi may hold no Docker client for.
+func (e *engineClient) SwarmTasks(ctx context.Context, nodeID string) ([]SwarmTask, error) {
+	args := filters.NewArgs()
+	if nodeID != "" {
+		args.Add("node", nodeID)
+	}
+	list, err := e.cli.TaskList(ctx, types.TaskListOptions{Filters: args})
+	if err != nil {
+		return nil, err
+	}
+	// Task -> service name, resolved once rather than per task.
+	svcs, serr := e.cli.ServiceList(ctx, types.ServiceListOptions{})
+	names := map[string]string{}
+	if serr == nil {
+		for _, s := range svcs {
+			names[s.ID] = s.Spec.Name
+		}
+	}
+	out := make([]SwarmTask, 0, len(list))
+	for _, t := range list {
+		st := SwarmTask{
+			ID:           t.ID,
+			ServiceName:  names[t.ServiceID],
+			NodeID:       t.NodeID,
+			Slot:         t.Slot,
+			State:        string(t.Status.State),
+			DesiredState: string(t.DesiredState),
+			Message:      t.Status.Message,
+			Err:          t.Status.Err,
+		}
+		if cs := t.Spec.ContainerSpec; cs != nil {
+			st.Image = cs.Image
+		}
+		if !t.Status.Timestamp.IsZero() {
+			st.UpdatedAt = t.Status.Timestamp.UTC().Format(time.RFC3339)
+		}
+		out = append(out, st)
+	}
+	return out, nil
 }

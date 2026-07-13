@@ -11,7 +11,10 @@ import { ACCESS_MODES, CONNECTIVITY_TYPES, nodeOptionDescription } from '@/const
 import FieldInfo from '@/components/FieldInfo.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { copyText } from '@/utils/clipboard'
-import type { Server, ServerConnectivity, ClusterStatus, ClusterJoinInstructions } from '@/api/types'
+import type {
+  Server, ServerConnectivity, ClusterStatus, ClusterJoinInstructions,
+  ClusterPreflight, NetCheck, NetCheckResult,
+} from '@/api/types'
 
 const notify = useNotificationStore()
 const router = useRouter()
@@ -82,7 +85,48 @@ async function loadCluster() {
   } catch { /* status is best-effort; the page still works without it */ }
 }
 
+// Preflight, loaded when the enable dialog opens. Its whole purpose is to say —
+// BEFORE the swarm is formed — that this engine cannot carry the overlay data plane
+// to other hosts (Docker Desktop / OrbStack run the daemon in a VM), and to list the
+// ports that must be open. Both failures otherwise surface much later, as an app
+// that resolves its database and then times out.
+const preflight = ref<ClusterPreflight | null>(null)
+const preflightLoading = ref(false)
+async function loadPreflight() {
+  preflightLoading.value = true
+  try {
+    preflight.value = (await clusterApi.preflight()).data.data
+  } catch {
+    preflight.value = null // best-effort: never block enabling on the advisory check
+  } finally {
+    preflightLoading.value = false
+  }
+}
+
+// Network check: probes the real overlay between every pair of nodes and separates
+// the three failures an app cannot tell apart (DNS / TCP / MTU).
+const netCheck = ref<NetCheck | null>(null)
+const netChecking = ref(false)
+async function runNetCheck() {
+  netChecking.value = true
+  netCheck.value = null
+  try {
+    netCheck.value = (await clusterApi.netCheck()).data.data
+    if (netCheck.value?.ok) notify.success('All cross-node paths are healthy')
+  } catch (e) {
+    notify.apiError(e, 'Network check failed')
+  } finally {
+    netChecking.value = false
+  }
+}
+function verdictClass(r: NetCheckResult): string {
+  if (r.payload) return 'badge-success badge-dot'
+  if (r.tcp) return 'badge-warning' // MTU black hole — the sneakiest failure
+  return 'badge-danger'
+}
+
 function openEnable() {
+  void loadPreflight()
   // Prefill with the manager's known address as a sensible default; the admin
   // should use the private/WG address peers can reach.
   const mgr = nodes.value.find((n) => n.is_local)
@@ -383,6 +427,53 @@ function swarmClass(n: Server): string {
                bridges, so they have no cross-node connectivity at all. Say exactly
                that, rather than leaving the admin to discover it as an app that
                can't resolve its database. -->
+          <!-- Network check. Cluster networking fails silently: the swarm forms, DNS
+               resolves, and packets vanish — so an app looks broken when the network
+               is. This probes the real overlay between every pair of nodes and names
+               which of the three failures it is. -->
+          <div v-if="clusterEnabled" class="netcheck">
+            <div class="netcheck-head">
+              <button type="button" class="btn btn-sm btn-secondary" :disabled="netChecking" @click="runNetCheck">
+                <span class="mdi mdi-lan-pending"></span>
+                {{ netChecking ? 'Probing every path…' : 'Run network check' }}
+              </button>
+              <span class="cell-sub">
+                Probes DNS, a TCP connection and a 1400-byte payload between every pair of nodes.
+              </span>
+            </div>
+
+            <template v-if="netCheck">
+              <div class="netcheck-summary" :class="netCheck.ok ? 'ok' : 'bad'">
+                <span class="mdi" :class="netCheck.ok ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"></span>
+                {{ netCheck.summary }}
+              </div>
+
+              <div v-if="netCheck.results.length" class="table-wrapper" style="margin-top: 8px">
+                <table>
+                  <thead>
+                    <tr><th>From → To</th><th>DNS</th><th>TCP</th><th>1400 B</th><th>Result</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in netCheck.results" :key="`${r.from}->${r.to}`">
+                      <td class="cell-title">{{ r.from }} → {{ r.to }}<div v-if="r.ip" class="cell-sub mono">{{ r.ip }}</div></td>
+                      <td><span class="mdi" :class="r.dns ? 'mdi-check text-ok' : 'mdi-close text-bad'"></span></td>
+                      <td><span class="mdi" :class="r.tcp ? 'mdi-check text-ok' : 'mdi-close text-bad'"></span></td>
+                      <td><span class="mdi" :class="r.payload ? 'mdi-check text-ok' : 'mdi-close text-bad'"></span></td>
+                      <td><span class="badge" :class="verdictClass(r)">{{ r.verdict }}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- A node with no Miabi agent cannot host a probe, so it is absent from the
+                   matrix entirely. Say so, or its absence reads as "healthy". -->
+              <div v-for="p in netCheck.probes.filter((x) => !x.reachable)" :key="p.server_id" class="cell-sub" style="margin-top: 6px">
+                <span class="mdi mdi-alert-outline"></span>
+                <strong>{{ p.node_name }}</strong> could not be probed — {{ p.error }}
+              </div>
+            </template>
+          </div>
+
           <div v-if="clusterEnabled && networksPending > 0" class="pending-hint">
             <span class="mdi mdi-alert-outline"></span>
             <span>
@@ -605,6 +696,39 @@ function swarmClass(n: Server): string {
                 The manager initializes a Docker Swarm. Member nodes can then be joined to a private overlay network.
                 If Docker is already in swarm mode, Miabi adopts it instead.
               </p>
+
+              <!-- Preflight. A VM-backed Docker engine (Docker Desktop, OrbStack) forms
+                   a swarm and resolves DNS perfectly, then drops every cross-node packet,
+                   because VXLAN and IPSec cannot be forwarded into the VM. Saying that here
+                   costs one paragraph; discovering it later costs an afternoon. -->
+              <div v-if="preflightLoading" class="cell-sub" style="margin-bottom: 12px">Checking this host…</div>
+              <template v-else-if="preflight">
+                <div
+                  v-for="f in preflight.findings"
+                  :key="f.title"
+                  class="pf-finding"
+                  :class="f.severity === 'blocker' ? 'pf-blocker' : 'pf-warning'"
+                >
+                  <div class="pf-title">
+                    <span class="mdi" :class="f.severity === 'blocker' ? 'mdi-alert-octagon' : 'mdi-alert-outline'"></span>
+                    {{ f.title }}
+                  </div>
+                  <p class="pf-detail">{{ f.detail }}</p>
+                </div>
+
+                <details class="pf-ports">
+                  <summary>Ports that must be open between every pair of nodes</summary>
+                  <table class="pf-table">
+                    <tbody>
+                      <tr v-for="r in preflight.firewall" :key="r.port">
+                        <td><code>{{ r.port }}</code></td>
+                        <td class="cell-sub">{{ r.purpose }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </details>
+              </template>
+
               <div class="form-group" style="margin-bottom: 0">
                 <label class="form-label">Advertise address</label>
                 <input v-model="advertiseAddr" class="form-input" placeholder="e.g. 10.0.0.1" style="font-family: monospace" autofocus />
@@ -708,6 +832,78 @@ function swarmClass(n: Server): string {
 .pending-hint > span:first-child {
   color: var(--warning, #b45309);
   font-size: 16px;
+}
+/* Preflight (enable dialog) */
+.pf-finding {
+  border: 1px solid;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+.pf-blocker {
+  border-color: var(--danger-border, #f0a6a6);
+  background: var(--danger-bg, rgba(220, 90, 90, 0.1));
+}
+.pf-warning {
+  border-color: var(--warning-border, #f5c26b);
+  background: var(--warning-bg, rgba(245, 194, 107, 0.12));
+}
+.pf-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.pf-detail {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+}
+.pf-ports {
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.pf-ports summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.pf-table td {
+  padding: 4px 8px 4px 0;
+  vertical-align: top;
+}
+/* Network check */
+.netcheck {
+  margin-top: 10px;
+}
+.netcheck-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+.netcheck-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.netcheck-summary.ok {
+  color: var(--success, #15803d);
+}
+.netcheck-summary.bad {
+  color: var(--danger, #b91c1c);
+}
+.text-ok {
+  color: var(--success, #15803d);
+}
+.text-bad {
+  color: var(--danger, #b91c1c);
+}
+.mono {
+  font-family: var(--font-mono, monospace);
 }
 .header-actions {
   display: inline-flex;

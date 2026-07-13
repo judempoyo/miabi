@@ -91,6 +91,75 @@ func (h *ClusterHandler) ApplyNetworking(c *okapi.Context) error {
 	return ok(c, h.cluster.Status())
 }
 
+// Preflight reports what this host can and cannot do before cluster mode is turned
+// on: whether its Docker engine can carry the overlay data plane to other hosts at
+// all, and the ports that must be open between nodes. Read-only.
+func (h *ClusterHandler) Preflight(c *okapi.Context) error {
+	p, err := h.cluster.Preflight(c.Request().Context())
+	if err != nil {
+		return c.AbortInternalServerError("failed to inspect the Docker engine", err)
+	}
+	return ok(c, p)
+}
+
+// NetCheck probes the cluster's overlay data plane between every pair of nodes,
+// separating the three failures that are indistinguishable from inside an app: a
+// name that will not resolve, a connection that never completes, and a payload that
+// silently dies at the MTU.
+//
+// It starts and removes probe containers, so it is a mutation, not a read.
+func (h *ClusterHandler) NetCheck(c *okapi.Context) error {
+	res, err := h.cluster.NetCheck(c.Request().Context())
+	if err != nil {
+		if errors.Is(err, cluster.ErrNotEnabled) {
+			return c.AbortBadRequest("cluster mode is not enabled")
+		}
+		return c.AbortInternalServerError("failed to run the network check", err)
+	}
+	h.record(c, "cluster.netcheck", 0)
+	return ok(c, res)
+}
+
+// SetAvailabilityRequest changes a swarm node's scheduling availability.
+type SetAvailabilityRequest struct {
+	Body struct {
+		// Availability is active | pause | drain. Drain reschedules the node's tasks
+		// away, which is what makes it safe to reboot.
+		Availability string `json:"availability"`
+	} `json:"body"`
+}
+
+// SetAvailability changes a swarm node's scheduling availability. Keyed by SWARM
+// node id, so an unmanaged member (no Miabi agent) can be drained too.
+func (h *ClusterHandler) SetAvailability(c *okapi.Context, req *SetAvailabilityRequest) error {
+	swarmNodeID := c.Param("swarmNodeID")
+	if swarmNodeID == "" {
+		return c.AbortBadRequest("swarm node id is required")
+	}
+	err := h.cluster.SetAvailability(c.Request().Context(), swarmNodeID, req.Body.Availability)
+	switch {
+	case errors.Is(err, cluster.ErrNotEnabled):
+		return c.AbortBadRequest("cluster mode is not enabled")
+	case errors.Is(err, cluster.ErrInvalidAvailability):
+		return c.AbortBadRequest(err.Error())
+	case err != nil:
+		return c.AbortInternalServerError("failed to change node availability", err)
+	}
+	h.record(c, "cluster.node.availability", 0)
+	return message(c, "node availability set to "+req.Body.Availability)
+}
+
+// NodeTasks lists the service tasks the scheduler placed on a swarm node. This is
+// the only way to see the workload of an unmanaged member — the containers live on
+// the node, which Miabi has no Docker client for.
+func (h *ClusterHandler) NodeTasks(c *okapi.Context) error {
+	tasks, err := h.cluster.Tasks(c.Request().Context(), c.Param("swarmNodeID"))
+	if err != nil {
+		return c.AbortInternalServerError("failed to list the node's tasks", err)
+	}
+	return ok(c, tasks)
+}
+
 // Members lists the swarm's nodes (docker node ls), annotated with whether each
 // maps to a managed Miabi node. Drives the manager detail page's cluster view.
 func (h *ClusterHandler) Members(c *okapi.Context) error {

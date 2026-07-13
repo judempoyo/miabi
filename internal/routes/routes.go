@@ -562,6 +562,9 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 		platformimage.KeyRelay: cfg.ForwardRelayImage,
 	})
 	databaseService.SetImageResolver(imageResolver)
+	// The network check runs socat probe containers on each node; it reuses the
+	// port-forward relay image rather than introducing another one to pull.
+	clusterService.SetNetCheckImage(imageResolver, cfg.ForwardRelayImage)
 	backupService.SetImageResolver(imageResolver)
 	backupService.SetLogStore(logStore) // externalize backup run logs to the shared store
 	// Volume backup: archives a volume to the workspace S3 target (volume-bkup).

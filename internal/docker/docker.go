@@ -151,6 +151,13 @@ type Client interface {
 	SwarmJoinTokens(ctx context.Context) (SwarmJoinTokens, error)
 	SwarmNodes(ctx context.Context) ([]SwarmNode, error)
 	SwarmNodeRemove(ctx context.Context, nodeID string, force bool) error
+	// SwarmNodeAvailability sets a node's scheduling availability (active | pause |
+	// drain). Drain is what makes a node safe to reboot — it reschedules the node's
+	// tasks away instead of letting Swarm keep placing onto a host that is going down.
+	SwarmNodeAvailability(ctx context.Context, nodeID, availability string) error
+	// SwarmTasks lists the swarm's tasks (all, or one node's). Only the manager can:
+	// the containers live on the nodes, which Miabi may hold no Docker client for.
+	SwarmTasks(ctx context.Context, nodeID string) ([]SwarmTask, error)
 
 	// Swarm services (cluster apps). Require a reachable manager; cluster deploys
 	// call these instead of RunContainer. CreateOverlayNetwork ensures the

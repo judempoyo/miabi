@@ -14,8 +14,8 @@ type UpdateStatus struct {
 	// LatestVersion is the newest release for the running build's channel, as a
 	// semver tag with the leading "v" (e.g. "v1.0.0-beta.5"). Empty until the
 	// first successful check.
-	LatestVersion string `json:"latest_version"`
-	ReleaseURL    string `json:"release_url"`
+	LatestVersion string     `json:"latest_version"`
+	ReleaseURL    string     `json:"release_url"`
 	PublishedAt   *time.Time `json:"published_at"`
 	// ETag from the last successful GitHub response. Replayed as If-None-Match so
 	// an unchanged release list answers 304, which costs no API quota.

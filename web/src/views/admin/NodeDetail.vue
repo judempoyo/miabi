@@ -5,7 +5,7 @@ import { useNotificationStore } from '@/stores/notification'
 import { nodesApi, type CreateNodePayload, type NodeWorkloads } from '@/api/nodes'
 import { clusterApi } from '@/api/cluster'
 import { ACCESS_MODES, CONNECTIVITY_TYPES, nodeOptionDescription } from '@/constants/node'
-import type { Server, NodeStats, NodeHostMetrics, GatewayStatus, GatewayCandidate, GatewayUpdateProgress, StatsSample, Container, ContainerStat, DockerVolume, DockerNetwork, NodePortUsage, ClusterMember } from '@/api/types'
+import type { Server, NodeStats, NodeHostMetrics, GatewayStatus, GatewayCandidate, GatewayUpdateProgress, StatsSample, Container, ContainerStat, DockerVolume, DockerNetwork, NodePortUsage, ClusterMember, SwarmTask } from '@/api/types'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import FieldInfo from '@/components/FieldInfo.vue'
 import { copyText } from '@/utils/clipboard'
@@ -105,6 +105,63 @@ function fmtCores(nanoCPUs?: number): string {
 // have no metrics, stats or shell — there is no Docker connection to read through.
 const unmanagedMembers = computed(() => clusterMembers.value.filter((m) => !m.managed).length)
 
+// Availability is what makes a node safe to reboot. Without drain, Swarm keeps
+// scheduling tasks onto a host that is about to disappear.
+const availBusy = ref('')
+// Drain evicts the node's tasks, so it is confirmed rather than applied on a stray
+// click of a dropdown. active/pause are harmless and apply immediately.
+const pendingDrain = ref<ClusterMember | null>(null)
+function onAvailabilityChange(m: ClusterMember, e: Event) {
+  const v = (e.target as HTMLSelectElement).value
+  if (v === 'drain') {
+    pendingDrain.value = m
+    void loadClusterMembers() // put the select back until the drain is confirmed
+    return
+  }
+  if (v === 'active' || v === 'pause') void setAvailability(m, v)
+}
+async function confirmDrain() {
+  const m = pendingDrain.value
+  pendingDrain.value = null
+  if (m) await setAvailability(m, 'drain')
+}
+async function setAvailability(m: ClusterMember, availability: 'active' | 'pause' | 'drain') {
+  availBusy.value = m.id
+  try {
+    await clusterApi.setAvailability(m.id, availability)
+    notify.success(`${m.hostname || 'Node'} set to ${availability}`)
+    await loadClusterMembers()
+  } catch (e) {
+    notify.apiError(e, 'Failed to change availability')
+  } finally {
+    availBusy.value = ''
+  }
+}
+
+// The tasks the scheduler placed on THIS node. Only the manager can enumerate them —
+// the containers live on the node, which Miabi may hold no Docker client for — so
+// this is the only view of an unmanaged member's real workload.
+const nodeTasks = ref<SwarmTask[]>([])
+const tasksLoading = ref(false)
+// This Miabi node's swarm id, resolved from the membership list.
+const swarmNodeID = computed(() => clusterMembers.value.find((m) => m.managed && m.server_id === node.value?.id)?.id ?? '')
+async function loadNodeTasks() {
+  if (!swarmNodeID.value) { nodeTasks.value = []; return }
+  tasksLoading.value = true
+  try {
+    nodeTasks.value = (await clusterApi.nodeTasks(swarmNodeID.value)).data.data ?? []
+  } catch {
+    nodeTasks.value = []
+  } finally {
+    tasksLoading.value = false
+  }
+}
+function taskStateClass(t: SwarmTask): string {
+  if (t.state === 'running') return 'badge-success badge-dot'
+  if (t.state === 'failed' || t.state === 'rejected') return 'badge-danger'
+  return 'badge-muted'
+}
+
 async function load() {
   loading.value = true
   offline.value = false
@@ -115,8 +172,12 @@ async function load() {
       notify.error('Node not found')
       return
     }
-    // The manager is the swarm authority; show the full cluster membership here.
-    if (node.value.is_local) await loadClusterMembers()
+    // Membership is a manager-side fact, but every node's page needs it: the full
+    // table is shown on the manager, and any node needs its own swarm id to list the
+    // tasks the scheduler placed there (the containers live on the node, which Miabi
+    // may hold no Docker client for — the manager is the only one who can see them).
+    await loadClusterMembers()
+    await loadNodeTasks()
     if (connected.value) {
       try {
         stats.value = (await nodesApi.stats(id)).data.data
@@ -890,7 +951,21 @@ const gwBadge = computed(() => {
                   <template v-else>—</template>
                 </td>
                 <td class="cell-sub" :title="`${m.tasks} running service task(s) scheduled here`">{{ m.tasks }}</td>
-                <td class="cell-sub">{{ m.availability || '—' }}</td>
+                <!-- Availability is what makes a node safe to reboot: without drain,
+                     Swarm keeps scheduling onto a host that is about to disappear. -->
+                <td>
+                  <select
+                    class="avail-select"
+                    :value="m.availability || 'active'"
+                    :disabled="availBusy === m.id"
+                    :title="'active — schedulable · pause — no new tasks · drain — reschedule its tasks away (do this before a reboot; they do not come back on their own)'"
+                    @change="onAvailabilityChange(m, $event)"
+                  >
+                    <option value="active">active</option>
+                    <option value="pause">pause</option>
+                    <option value="drain">drain</option>
+                  </select>
+                </td>
                 <td><span class="badge" :class="memberStateClass(m)">{{ m.state || 'unknown' }}</span></td>
                 <td class="cell-sub">{{ m.engine_version || '—' }}</td>
                 <td>
@@ -912,6 +987,39 @@ const gwBadge = computed(() => {
           {{ unmanagedMembers }} swarm member(s) have no Miabi agent. They run tasks normally, and
           logs and uptime still work — but an app scheduled there shows no metrics, stats or shell,
           because Miabi has no Docker connection to the node.
+        </div>
+      </div>
+
+      <!-- What the scheduler actually placed here. This comes from the MANAGER, not
+           from this node's Docker — so it works even when the node is offline or has
+           no Miabi agent, which is exactly when the containers list below is empty
+           and you would otherwise conclude the node is doing nothing. -->
+      <div v-if="swarmNodeID" class="card mb-4">
+        <div class="card-header">
+          <h2>Cluster tasks <span class="text-muted" style="font-weight: 400">{{ nodeTasks.length }}</span></h2>
+          <span class="text-muted text-sm">Service replicas the Swarm scheduler placed on this node.</span>
+        </div>
+        <div v-if="tasksLoading" class="card-body text-muted text-sm">Loading…</div>
+        <div v-else-if="nodeTasks.length === 0" class="card-body text-muted text-sm">
+          No service tasks are scheduled here.
+        </div>
+        <div v-else class="table-wrapper">
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>State</th><th>Desired</th><th>Updated</th></tr></thead>
+            <tbody>
+              <tr v-for="t in nodeTasks" :key="t.id">
+                <td class="cell-title">
+                  {{ t.service_name || '—' }}<span v-if="t.slot" class="cell-sub"> · replica {{ t.slot }}</span>
+                  <div v-if="t.error" class="cell-sub text-bad">{{ t.error }}</div>
+                  <div v-else-if="t.message" class="cell-sub">{{ t.message }}</div>
+                </td>
+                <td class="cell-sub mono">{{ t.image || '—' }}</td>
+                <td><span class="badge" :class="taskStateClass(t)">{{ t.state }}</span></td>
+                <td class="cell-sub">{{ t.desired_state }}</td>
+                <td class="cell-sub">{{ t.updated_at ? new Date(t.updated_at).toLocaleString() : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -1398,6 +1506,24 @@ const gwBadge = computed(() => {
       </div>
     </Teleport>
 
+    <!-- Drain evicts the node's tasks now, and — the part Swarm never tells you —
+         does not put them back when the node returns to active. Setting a node active
+         only makes it eligible again; existing tasks stay where they were rescheduled
+         until something forces a move. Drain a node for a reboot, bring it back, and
+         your cluster is quietly lopsided with no indication why. -->
+    <ConfirmDialog
+      :open="!!pendingDrain"
+      :title="`Drain ${pendingDrain?.hostname || 'node'}?`"
+      message="Swarm reschedules this node's service tasks onto other nodes now, and places no new ones here. This is what makes the node safe to reboot.
+
+Note: setting it back to Active does NOT move the tasks back. Swarm never rebalances on its own — they stay where they were rescheduled until a redeploy, a scale, or a drain of their new node moves them again."
+      confirm-label="Drain node"
+      variant="danger"
+      :busy="availBusy === pendingDrain?.id"
+      @confirm="confirmDrain"
+      @cancel="pendingDrain = null"
+    />
+
     <ConfirmDialog
       :open="showTeardown"
       title="Tear down gateway"
@@ -1556,4 +1682,19 @@ code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: va
 .upgrade-step.is-todo { opacity: 0.6; }
 .gw-update-fail { display: flex; gap: 10px; align-items: flex-start; color: var(--danger-700, #b91c1c); }
 .gw-update-fail .mdi { font-size: 20px; line-height: 1.2; }
+
+.avail-select {
+  font-size: 12px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+.text-bad {
+  color: var(--danger, #b91c1c);
+}
+.mono {
+  font-family: var(--font-mono, monospace);
+}
 </style>

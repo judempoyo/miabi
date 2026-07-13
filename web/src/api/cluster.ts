@@ -1,5 +1,8 @@
 import api from './client'
-import type { ApiResponse, ClusterStatus, ClusterJoinInstructions, ClusterMember } from './types'
+import type {
+  ApiResponse, ClusterStatus, ClusterJoinInstructions, ClusterMember,
+  ClusterPreflight, NetCheck, SwarmTask,
+} from './types'
 
 // clusterApi drives Miabi's optional cluster mode (Docker Swarm under the hood).
 // Status is always available; the mutations require platform-admin rights and
@@ -22,6 +25,18 @@ export const clusterApi = {
   // was offline comes back. Containers are not restarted, but in-flight connections
   // inside each workspace drop briefly.
   applyNetworking: () => api.post<ApiResponse<ClusterStatus>>('/admin/cluster/network/apply'),
+  // What this host can/can't do before enabling cluster mode, plus the ports that
+  // must be open between nodes (including ESP, which almost nobody opens).
+  preflight: () => api.get<ApiResponse<ClusterPreflight>>('/admin/cluster/preflight'),
+  // Probe the overlay data plane between every pair of nodes. Starts and removes
+  // probe containers, so it is a POST.
+  netCheck: () => api.post<ApiResponse<NetCheck>>('/admin/cluster/net-check'),
+  // active | pause | drain. Keyed by SWARM node id so an unmanaged member can be
+  // drained too — which is exactly when you most need to.
+  setAvailability: (swarmNodeId: string, availability: 'active' | 'pause' | 'drain') =>
+    api.post<ApiResponse<{ message: string }>>(`/admin/cluster/members/${swarmNodeId}/availability`, { availability }),
+  nodeTasks: (swarmNodeId: string) =>
+    api.get<ApiResponse<SwarmTask[]>>(`/admin/cluster/members/${swarmNodeId}/tasks`),
   joinNode: (nodeId: number) =>
     api.post<ApiResponse<{ message: string }>>(`/admin/cluster/nodes/${nodeId}/join`),
   leaveNode: (nodeId: number) =>

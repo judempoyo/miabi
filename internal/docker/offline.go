@@ -121,8 +121,12 @@ func (o offlineClient) SwarmLeave(context.Context, bool) error            { retu
 func (o offlineClient) SwarmJoinTokens(context.Context) (SwarmJoinTokens, error) {
 	return SwarmJoinTokens{}, o.err
 }
-func (o offlineClient) SwarmNodes(context.Context) ([]SwarmNode, error)     { return nil, o.err }
-func (o offlineClient) SwarmNodeRemove(context.Context, string, bool) error { return o.err }
+func (o offlineClient) SwarmNodes(context.Context) ([]SwarmNode, error)             { return nil, o.err }
+func (o offlineClient) SwarmNodeRemove(context.Context, string, bool) error         { return o.err }
+func (o offlineClient) SwarmNodeAvailability(context.Context, string, string) error { return o.err }
+func (o offlineClient) SwarmTasks(context.Context, string) ([]SwarmTask, error) {
+	return nil, o.err
+}
 func (o offlineClient) ServiceCreate(context.Context, ServiceSpec) (string, error) {
 	return "", o.err
 }

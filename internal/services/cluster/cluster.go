@@ -88,6 +88,11 @@ type Service struct {
 	// bridges — non-zero in cluster mode means cross-node east-west is not working
 	// for them yet, and the admin must apply cluster networking. Optional.
 	networkPending func() int
+
+	// probeImages/probeImageFallback resolve the utility image NetCheck runs its
+	// probe containers from (see netcheck.go).
+	probeImages        NetCheckImages
+	probeImageFallback string
 }
 
 // SetNetworkMigrator wires the workspace-network driver conversion: `migrate`
@@ -519,6 +524,47 @@ func (s *Service) Members(ctx context.Context) ([]Member, error) {
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// ErrInvalidAvailability is returned for an availability outside active/pause/drain.
+var ErrInvalidAvailability = errors.New("availability must be active, pause or drain")
+
+// SetAvailability changes a swarm node's scheduling availability.
+//
+//	active — the scheduler may place new tasks here
+//	pause  — existing tasks keep running; no new ones are placed
+//	drain  — existing tasks are rescheduled off this node
+//
+// Drain is what makes a node safe to reboot: without it Swarm keeps scheduling onto
+// a host that is about to go away. It is keyed by SWARM node id, not Miabi node id,
+// so an unmanaged member (a swarm node with no Miabi agent) can be drained too —
+// which is exactly when you most need to.
+func (s *Service) SetAvailability(ctx context.Context, swarmNodeID, availability string) error {
+	if !s.CapCluster() {
+		return ErrNotEnabled
+	}
+	switch availability {
+	case "active", "pause", "drain":
+	default:
+		return ErrInvalidAvailability
+	}
+	if err := s.clients.Local().SwarmNodeAvailability(ctx, swarmNodeID, availability); err != nil {
+		return err
+	}
+	logger.Info("swarm node availability changed", "node", swarmNodeID, "availability", availability)
+	s.Refresh(ctx)
+	return nil
+}
+
+// Tasks lists the service tasks the scheduler placed on a swarm node (all nodes when
+// swarmNodeID is empty). Only the manager can answer this: the task's container lives
+// on the node, which Miabi may hold no Docker client for — so this is the only way to
+// see an unmanaged node's real workload.
+func (s *Service) Tasks(ctx context.Context, swarmNodeID string) ([]docker.SwarmTask, error) {
+	if !s.CapCluster() {
+		return []docker.SwarmTask{}, nil
+	}
+	return s.clients.Local().SwarmTasks(ctx, swarmNodeID)
 }
 
 // JoinInstructions are what an operator needs to join a host to the swarm by
