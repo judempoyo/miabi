@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/swarm"
 )
 
@@ -48,6 +49,17 @@ type SwarmNode struct {
 	Reachability  string `json:"reachability,omitempty"` // reachable | unreachable (managers)
 	Addr          string `json:"addr,omitempty"`
 	EngineVersion string `json:"engine_version,omitempty"`
+	// Capacity as the swarm scheduler sees it — what it packs tasks against. It comes
+	// from the node's own report over the swarm control plane, so it is known even for
+	// a node Miabi has no Docker client for (an unmanaged member with no agent), where
+	// host metrics are otherwise unavailable.
+	NanoCPUs    int64  `json:"nano_cpus,omitempty"`    // 1e9 == one core
+	MemoryBytes int64  `json:"memory_bytes,omitempty"` // total, not used
+	OS          string `json:"os,omitempty"`           // linux | windows
+	Arch        string `json:"arch,omitempty"`         // x86_64 | aarch64 | …
+	// Tasks is how many service tasks the scheduler currently runs here — the node's
+	// load. Populated by SwarmNodes; 0 for an idle node.
+	Tasks int `json:"tasks"`
 }
 
 // SwarmJoinTokens are the secrets a node uses to join a swarm in either role.
@@ -158,6 +170,10 @@ func (e *engineClient) SwarmNodes(ctx context.Context) ([]SwarmNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Task load per node, in one call rather than one per node. Best-effort: a
+	// failure here leaves Tasks at 0 rather than failing the whole listing.
+	load := e.swarmTaskCounts(ctx)
+
 	out := make([]SwarmNode, 0, len(list))
 	for _, n := range list {
 		sn := SwarmNode{
@@ -168,7 +184,14 @@ func (e *engineClient) SwarmNodes(ctx context.Context) ([]SwarmNode, error) {
 			State:         string(n.Status.State),
 			Addr:          n.Status.Addr,
 			EngineVersion: n.Description.Engine.EngineVersion,
+			Tasks:         load[n.ID],
 		}
+		if r := n.Description.Resources; r.NanoCPUs > 0 || r.MemoryBytes > 0 {
+			sn.NanoCPUs = r.NanoCPUs
+			sn.MemoryBytes = r.MemoryBytes
+		}
+		sn.OS = n.Description.Platform.OS
+		sn.Arch = n.Description.Platform.Architecture
 		if n.ManagerStatus != nil {
 			sn.Leader = n.ManagerStatus.Leader
 			sn.Reachability = string(n.ManagerStatus.Reachability)
@@ -179,6 +202,24 @@ func (e *engineClient) SwarmNodes(ctx context.Context) ([]SwarmNode, error) {
 		out = append(out, sn)
 	}
 	return out, nil
+}
+
+// swarmTaskCounts maps a swarm node id to the number of tasks running on it.
+// Best-effort: an error yields an empty map, so callers simply report no load.
+func (e *engineClient) swarmTaskCounts(ctx context.Context) map[string]int {
+	tasks, err := e.cli.TaskList(ctx, types.TaskListOptions{
+		Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
+	})
+	if err != nil {
+		return map[string]int{}
+	}
+	counts := make(map[string]int, len(tasks))
+	for _, t := range tasks {
+		if t.NodeID != "" && t.Status.State == swarm.TaskStateRunning {
+			counts[t.NodeID]++
+		}
+	}
+	return counts
 }
 
 // SwarmNodeRemove removes a node from the swarm's node list on the manager

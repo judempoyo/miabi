@@ -1494,6 +1494,15 @@ export interface ClusterMember {
   reachability?: string
   addr?: string
   engine_version?: string
+  // Capacity as the swarm scheduler sees it — what it packs tasks against. Reported
+  // by the node over the swarm control plane, so it is known even for an unmanaged
+  // member (no Miabi agent), where host metrics are unavailable.
+  nano_cpus?: number // 1e9 == one core
+  memory_bytes?: number // total, not used
+  os?: string
+  arch?: string
+  // How many service tasks the scheduler currently runs on this node.
+  tasks: number
   managed: boolean
   server_id?: number
   server_name?: string

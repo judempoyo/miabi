@@ -84,15 +84,26 @@ function fmtDateTime(s?: string | null): string {
 }
 
 // --- Cluster membership helpers ---
+// Role and leadership are separate facts: the Raft leader is also a manager, and
+// collapsing them into one label hid that. The leader badge is rendered alongside.
 function memberRole(m: ClusterMember): string {
-  return m.leader ? 'leader' : m.role || 'worker'
+  return m.role || 'worker'
 }
 function memberRoleClass(m: ClusterMember): string {
-  return m.leader ? 'badge-info' : 'badge-muted'
+  return m.role === 'manager' ? 'badge-info' : 'badge-muted'
 }
 function memberStateClass(m: ClusterMember): string {
   return m.state === 'ready' ? 'badge-success badge-dot' : 'badge-warning'
 }
+// Swarm reports capacity in nano-CPUs (1e9 == one core).
+function fmtCores(nanoCPUs?: number): string {
+  if (!nanoCPUs) return '—'
+  const cores = nanoCPUs / 1e9
+  return `${Number.isInteger(cores) ? cores : cores.toFixed(1)} vCPU`
+}
+// Swarm members with no Miabi agent: they run tasks fine, but apps placed on them
+// have no metrics, stats or shell — there is no Docker connection to read through.
+const unmanagedMembers = computed(() => clusterMembers.value.filter((m) => !m.managed).length)
 
 async function load() {
   loading.value = true
@@ -847,21 +858,60 @@ const gwBadge = computed(() => {
         </div>
         <div class="table-wrapper">
           <table>
-            <thead><tr><th>Hostname</th><th>Role</th><th>Availability</th><th>State</th><th>Engine</th><th>Miabi node</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Hostname</th><th>Role</th><th>Capacity</th><th>Tasks</th>
+                <th>Availability</th><th>State</th><th>Engine</th><th>Miabi node</th>
+              </tr>
+            </thead>
             <tbody>
               <tr v-for="m in clusterMembers" :key="m.id">
-                <td><span class="cell-title">{{ m.hostname || '—' }}</span></td>
-                <td><span class="badge" :class="memberRoleClass(m)">{{ memberRole(m) }}</span></td>
+                <td>
+                  <span class="cell-title">{{ m.hostname || '—' }}</span>
+                  <div v-if="m.addr || m.os" class="cell-sub">
+                    <code v-if="m.addr">{{ m.addr }}</code>
+                    <span v-if="m.addr && m.os"> · </span>
+                    <span v-if="m.os">{{ m.os }}/{{ m.arch }}</span>
+                  </div>
+                </td>
+                <td>
+                  <span class="badge" :class="memberRoleClass(m)">{{ memberRole(m) }}</span>
+                  <span v-if="m.leader" class="badge badge-info" style="margin-left: 4px" title="Raft leader">leader</span>
+                </td>
+                <!-- Capacity the scheduler packs against. It comes from the node's own
+                     report over the swarm control plane, so it is known even for an
+                     unmanaged member, where host metrics are unavailable. -->
+                <td class="cell-sub">
+                  <template v-if="m.nano_cpus || m.memory_bytes">
+                    <span v-if="m.nano_cpus"><span class="mdi mdi-cpu-64-bit"></span> {{ fmtCores(m.nano_cpus) }}</span>
+                    <span v-if="m.nano_cpus && m.memory_bytes"> · </span>
+                    <span v-if="m.memory_bytes"><span class="mdi mdi-memory"></span> {{ fmtSize(m.memory_bytes) }}</span>
+                  </template>
+                  <template v-else>—</template>
+                </td>
+                <td class="cell-sub" :title="`${m.tasks} running service task(s) scheduled here`">{{ m.tasks }}</td>
                 <td class="cell-sub">{{ m.availability || '—' }}</td>
                 <td><span class="badge" :class="memberStateClass(m)">{{ m.state || 'unknown' }}</span></td>
                 <td class="cell-sub">{{ m.engine_version || '—' }}</td>
                 <td>
                   <a v-if="m.managed" style="cursor: pointer" @click.prevent="router.push(`/admin/nodes/${m.server_id}`)" href="#">{{ m.server_name }}<span v-if="m.is_manager" class="cell-sub"> (this node)</span></a>
-                  <span v-else class="badge badge-warning" title="A swarm member with no Miabi node record (joined directly)">unmanaged</span>
+                  <span
+                    v-else
+                    class="badge badge-warning"
+                    title="A swarm member with no Miabi agent. It runs tasks fine — Swarm schedules them itself — but Miabi has no Docker connection to it, so apps placed here have no metrics, no stats and no shell. Logs and uptime still work (the manager reports them). Add it as a Miabi node to get the rest."
+                  >unmanaged</span>
                 </td>
               </tr>
             </tbody>
           </table>
+        </div>
+        <!-- The consequence of an unmanaged member is not obvious and bites at the
+             worst moment (an app that runs but shows no metrics), so state it once. -->
+        <div v-if="unmanagedMembers > 0" class="card-body text-muted text-sm" style="padding-top: 0">
+          <span class="mdi mdi-information-outline"></span>
+          {{ unmanagedMembers }} swarm member(s) have no Miabi agent. They run tasks normally, and
+          logs and uptime still work — but an app scheduled there shows no metrics, stats or shell,
+          because Miabi has no Docker connection to the node.
         </div>
       </div>
 
