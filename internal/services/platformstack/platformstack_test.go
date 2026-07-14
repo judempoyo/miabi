@@ -1077,3 +1077,27 @@ func TestTimezoneIsNotSeededIntoGatewayEnv(t *testing.T) {
 		t.Error("the gateway lost TZ")
 	}
 }
+
+// Restart restarts CONTAINERS; it does not recreate them. So it can re-read what is on
+// disk (the gateway's bind-mounted goma.yml) but cannot apply a spec change — and the
+// components it walks must be the same ones, in the same dependency order, or a
+// whole-stack restart would bring the control plane back before its database.
+func TestRestartWalksComponentsInDependencyOrder(t *testing.T) {
+	m := testManifest()
+	s := &Service{}
+
+	var order []string
+	for _, c := range s.components(m) {
+		order = append(order, c.Name)
+	}
+	want := []string{ContainerPostgres, ContainerRedis, ContainerControlPlane, ContainerGateway}
+	if len(order) != len(want) {
+		t.Fatalf("components = %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("restart order = %v, want %v — the control plane must not come back "+
+				"before the database it exits without", order, want)
+		}
+	}
+}
