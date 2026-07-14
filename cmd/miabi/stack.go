@@ -50,6 +50,10 @@ func registerStackCommands(cli *okapicli.CLI) {
 		String("file", "f", "", "Manifest path").
 		Bool("yes", "y", false, "Do not prompt")
 
+	cli.Command("restart", "Restart the stack, or one component (miabi, miabi-gateway, …)", runRestart).
+		String("file", "f", "", "Manifest path").
+		Bool("yes", "y", false, "Do not prompt")
+
 	cli.Command("status", "Show the installed stack against its manifest", runStatus).
 		String("file", "f", "", "Manifest path")
 
@@ -424,6 +428,47 @@ func isDrifted(ctx context.Context, svc *platformstack.Service, name, want strin
 		}
 	}
 	return true // not running at all: rolling it out is exactly right
+}
+
+// runRestart restarts containers WITHOUT recreating them — which is what makes it
+// useful: it re-reads what is on disk. Editing the gateway's goma.yml is the obvious
+// case (Goma watches its providers directory, not its base config), and a spec change
+// is the obvious non-case, so it says so rather than leaving the operator puzzled.
+func runRestart(cmd *okapicli.Command) error {
+	svc, dc, err := stackService(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dc.Close() }()
+
+	m, err := platformstack.Load(manifestPath(cmd))
+	if err != nil {
+		return withInstallHint(err)
+	}
+
+	only := ""
+	if args := cmd.Args(); len(args) > 0 {
+		only = args[0]
+	}
+
+	what := "the whole stack"
+	if only != "" {
+		what = only
+	}
+	// A whole-stack restart takes the panel down for as long as it takes to come back;
+	// one component is a smaller ask. Either way, confirm — this is not a read.
+	if !cmd.GetBool("yes") && !confirm(fmt.Sprintf("Restart %s?", what)) {
+		return errors.New("cancelled")
+	}
+
+	ctx, cancel := stackCtx()
+	defer cancel()
+	if err := svc.Restart(ctx, m, only); err != nil {
+		return err
+	}
+
+	fmt.Printf("\n✓ Restarted %s.\n", what)
+	return nil
 }
 
 func runStatus(cmd *okapicli.Command) error {
