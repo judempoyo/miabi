@@ -33,7 +33,7 @@ const (
 	//
 	// The labels above describe what Miabi CREATES. The three below describe what
 	// Miabi IS: the control plane, its Postgres, its Redis, the central gateway and
-	// the node agents. That stack is deployed by deploy/compose.yaml — from OUTSIDE
+	// the node agents. That stack is deployed by examples/compose/compose.yaml — from OUTSIDE
 	// Miabi — so without these it carries no platform identity at all, and Miabi
 	// cannot recognize its own components when it enumerates the engine.
 
@@ -66,7 +66,7 @@ const PartOfMiabi = "miabi"
 // were already in use as string literals at their call sites and are named here so
 // there is one spelling of each.
 const (
-	// Platform stack (deploy/compose.yaml + the agent).
+	// Platform stack (examples/compose/compose.yaml + the agent).
 	RoleControlPlane       = "control-plane"
 	RolePlatformDB         = "platform-db"
 	RolePlatformCache      = "platform-cache"
@@ -83,7 +83,7 @@ const (
 
 // Lifecycle owners for LabelManagedBy.
 const (
-	// ManagedByCompose: created by deploy/compose.yaml. Miabi may read it and update
+	// ManagedByCompose: created by examples/compose/compose.yaml. Miabi may read it and update
 	// it in place, but must write any version change back to the compose env too —
 	// otherwise `docker compose up -d` reverts the upgrade.
 	ManagedByCompose = "compose"

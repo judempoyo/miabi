@@ -111,7 +111,7 @@ type NetworkConfig struct {
 // Gateway configures Goma: its config file and its environment.
 //
 // The config is a FILE ON THE HOST, bind-mounted read-only — exactly as
-// deploy/compose.yaml does it (`./goma/goma.yml:/etc/goma/goma.yml:ro`). It is not
+// examples/compose/compose.yaml does it (`./goma/goma.yml:/etc/goma/goma.yml:ro`). It is not
 // copied into a volume: copying makes the volume the source of truth and the host
 // file a stale duplicate that every converge silently overwrites, so an operator
 // following goma.yml's own instructions ("uncomment this to restrict the panel to
@@ -147,7 +147,7 @@ type Gateway struct {
 // stylistic choice: a non-empty MIABI_REGISTRY_* value is a ONE-WAY OVERRIDE — it
 // pins the setting and the admin UI can no longer change it. Leaving the keys absent
 // is what keeps the registry a UI-managed setting, which is the right default for an
-// operator who has not asked for it. deploy/compose.yaml and install.sh take exactly
+// operator who has not asked for it. examples/compose/compose.yaml and install.sh take exactly
 // the same position.
 type Registry struct {
 	Enabled bool `yaml:"enabled"`

@@ -6,8 +6,8 @@
 # a shared volume. It also shows how to scale the background worker out of the
 # panel process.
 #
-# This complements ../../deploy/compose.yaml (the minimal production stack).
-# Prefer that one for a bare install; use this to see the knobs.
+# This is the only Compose stack Miabi ships. For a Miabi-managed install (which is
+# what lets `miabi update` replace the control plane), use ../../deploy/install.sh.
 #
 # Quick start:
 #   cp .env.example .env         # then edit: domains + secrets (openssl rand -hex 32)
@@ -121,6 +121,14 @@ services:
       # Public panel URL — also the CORS allowlist (production rejects "*").
       MIABI_WEB_URL: ${MIABI_WEB_URL:?set MIABI_WEB_URL, e.g. https://miabi.example.com}
       MIABI_CONTROL_URL: ${MIABI_WEB_URL}
+      # These reach the container through env_file as well, but .env.example ships them
+      # BLANK. Restating them with `:?` turns a forgotten secret into an immediate
+      # `docker compose up` abort that names the variable, rather than a container that
+      # starts, fails config validation and crash-loops — the same failure, found the
+      # slow way.
+      MIABI_JWT_SECRET: "${MIABI_JWT_SECRET:?generate one with openssl rand -hex 32}"
+      MIABI_ENCRYPTION_KEY: "${MIABI_ENCRYPTION_KEY:?generate one with openssl rand -hex 32}"
+      MIABI_ADMIN_PASSWORD: "${MIABI_ADMIN_PASSWORD:?set the first admin password}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - gateway-providers:/etc/goma/providers

@@ -20,7 +20,7 @@ import (
 // / Redis password are passed as env — meaning the config holds no secret and the
 // panel's hostname lives in exactly one place (the manifest).
 //
-// It is byte-identical to deploy/goma/goma.yml, which the Compose path bind-mounts;
+// It is byte-identical to examples/compose/goma.yml, which the Compose path bind-mounts;
 // a test asserts that, so the two install paths cannot drift into serving different
 // routing rules.
 //

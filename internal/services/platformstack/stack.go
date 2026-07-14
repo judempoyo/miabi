@@ -5,7 +5,7 @@
 // volumes, Postgres, Redis, the gateway and the control plane — directly against the
 // Docker API, with every component tagged io.miabi.managed-by=miabi.
 //
-// Why this exists, when deploy/compose.yaml already works:
+// Why this exists, when examples/compose/compose.yaml already works:
 //
 // Compose owns what Compose created. A container Miabi recreates out-of-band is
 // silently reverted by the next `docker compose up -d`, which reads compose.yaml and
@@ -51,7 +51,7 @@ const CurrentVersion = 1
 // either, and callers say so.
 var ErrNotInstalled = errors.New("no Miabi stack manifest found")
 
-// Container names. They match deploy/compose.yaml deliberately: an operator's muscle
+// Container names. They match examples/compose/compose.yaml deliberately: an operator's muscle
 // memory (`docker logs miabi`) keeps working across both install paths, and Phase 1's
 // name shield already knows them.
 const (
