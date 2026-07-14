@@ -305,7 +305,22 @@ proxy that needs only an outbound connection and the local Docker socket.
 
 ## Quick Start
 
-### One-line install (production)
+Miabi runs as four containers — the control plane, PostgreSQL, Redis and the Goma
+gateway. You can have **Docker Compose** create them, or let **Miabi** create them
+itself. Both are supported; they differ in who owns the containers, and that decides
+whether Miabi can update itself.
+
+| | Compose (default) | Stack |
+|---|---|---|
+| Containers created by | Docker Compose, from `/opt/miabi/compose.yaml` | Miabi, against the Docker API |
+| Desired state in | `compose.yaml` + `.env` | `/etc/miabi/stack.yaml` |
+| Upgrades | re-run the installer → `docker compose up -d` | `miabi update` — replaces Miabi's **own** container, rolling back if it fails |
+
+Compose owns what Compose created: if Miabi recreated one of its own containers, the
+next `docker compose up -d` would silently revert it. That is why self-update needs
+stack mode.
+
+### One-line install (production, Compose)
 
 Installs Docker if needed, fetches the production compose + config into
 `/opt/miabi`, generates secrets, and brings the stack up:
@@ -314,11 +329,53 @@ Installs Docker if needed, fetches the production compose + config into
 curl -fsSL https://get.miabi.io | sudo bash
 ```
 
-Then edit `/opt/miabi/.env` (set your domain) and `/opt/miabi/goma/goma.yml`
-(domain + ACME email), and re-run the installer. Open your domain and register —
-**the first account becomes the platform admin**.
+Prompts for your domain and ACME email (pass `MIABI_DOMAIN=` / `MIABI_ACME_EMAIL=`
+to skip the prompts — answering over a pipe is unreliable). Open your domain and sign
+in with the seeded platform admin.
 
-### Docker Compose
+### Stack install (Miabi manages itself)
+
+```bash
+curl -fsSL https://get.miabi.io | sudo MIABI_INSTALL_MODE=stack \
+  MIABI_DOMAIN=miabi.example.com MIABI_ACME_EMAIL=you@example.com bash
+```
+
+Afterwards, manage it with the `miabi-stack` wrapper the installer drops:
+
+```bash
+miabi-stack status                     # what is running, and its health
+MIABI_TAG=1.5.0 miabi-stack update     # roll forward (rolls back if it fails)
+miabi-stack uninstall                  # keeps your data; add --volumes to destroy it
+```
+
+### `docker run` (no script)
+
+There is **no binary to install** — the Miabi image *is* the installer, since its
+entrypoint is the `miabi` binary. A stack install is one command:
+
+```bash
+docker run --rm -it \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /etc/miabi:/etc/miabi \
+  miabi/miabi:1.4.0 install --domain miabi.example.com
+```
+
+The tag you invoke is the version you get: the image asks Docker for its own image
+reference, so a private registry works exactly like Docker Hub. `update`, `status` and
+`uninstall` are the same command with a different verb — and because the installer is
+an *ephemeral* container, it can replace the control plane without killing itself.
+
+> [!WARNING]
+> Do not omit `-v /etc/miabi:/etc/miabi`. Without it the manifest — the only copy of
+> your database password and encryption key — is written inside the throwaway
+> container and lost when it exits. The install still reports success and the stack
+> comes up healthy, but you can never manage or upgrade it, and a re-install cannot
+> reopen the database.
+
+Docker must already be installed for this path; the installer script is what installs
+it for you.
+
+### Docker Compose (manual)
 
 ```bash
 git clone https://github.com/miabi-io/miabi.git && cd miabi/deploy

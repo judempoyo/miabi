@@ -29,6 +29,13 @@
 #   MIABI_INSTALL_MODE          compose (default) | stack
 #   MIABI_DIR                   install directory              (default /opt/miabi)
 #   MIABI_ETC                   stack-mode manifest dir        (default /etc/miabi)
+#   MIABI_REGISTRY_ENABLED      enable the built-in registry   (skips the prompt)
+#   MIABI_REGISTRY_HOST         its hostname                   (default registry.<domain>)
+#   MIABI_NO_HOST_PROC          1 = do not bind the host's /proc into Miabi. Set it
+#                               where the bind is refused (a rootless daemon, a
+#                               hardened host, a socket proxy that forbids host binds);
+#                               host metrics then fall back to the container's /proc,
+#                               which already reflects host CPU/memory. Stack mode only.
 #   MIABI_VERSION               Miabi release to install       (default: pinned below)
 #   GOMA_VERSION                Goma Gateway release           (default: pinned below)
 #   RUNNER_VERSION              miabi/runner release           (default: pinned below)
@@ -428,6 +435,28 @@ install_stack() {
   admin="$(prompt MIABI_ADMIN_EMAIL "First admin's login" "$acme")"
   image="miabi/miabi:${MIABI_IMAGE_TAG}"
 
+  # Optional flags, built as an array so an unset one contributes nothing (an empty
+  # string would arrive as a stray "" argument).
+  local extra=()
+
+  # Built-in registry. Declining leaves the keys out of the manifest entirely, which
+  # is what keeps the registry a UI-managed setting — see the compose branch below.
+  if prompt_yn MIABI_REGISTRY_ENABLED 'Enable the built-in container registry?'; then
+    local registry_host
+    registry_host="$(prompt MIABI_REGISTRY_HOST 'Registry host' "registry.${domain}")"
+    extra+=(--registry --registry-host "$registry_host")
+    # The CLI validates the hostname (it gets its own certificate, so a stray "y"
+    # would have the gateway request one for a name that cannot exist) — no need to
+    # re-implement that check here.
+  fi
+
+  # Some hosts refuse a bind of /proc: a rootless daemon, a hardened host, a socket
+  # proxy that forbids host binds. Miabi then reads its own /proc, which inside a
+  # container already reflects host CPU/memory, so the Nodes page keeps working.
+  case "${MIABI_NO_HOST_PROC:-0}" in
+    1|true|yes) extra+=(--no-host-proc) ;;
+  esac
+
   log "Installing the Miabi stack with ${image}"
 
   # -t only with a real tty: the confirm prompt needs one, but `curl | bash` has
@@ -453,7 +482,12 @@ install_stack() {
       --acme-email "$acme" \
       --admin-email "$admin" \
       --gateway-image "jkaninda/goma-gateway:${GOMA_IMAGE_TAG}" \
+      ${extra[@]+"${extra[@]}"} \
       $assume || die "miabi install failed"
+      # ${extra[@]+"..."}, not a bare "${extra[@]}": under `set -u`, expanding an EMPTY
+      # array is an "unbound variable" error on bash < 4.4 (still shipped on EL7-era
+      # hosts). This form expands to nothing when the array is empty and quotes each
+      # element when it is not.
 
   # A 3-line wrapper so nobody has to remember the docker run incantation. Named
   # miabi-stack, NOT miabi: `miabi` is already the Miabi CLI (an authenticated API
