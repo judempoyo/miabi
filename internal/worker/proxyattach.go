@@ -114,7 +114,7 @@ func (r *ProxyNetworkReconciler) ReconcileIngressGateway(ctx context.Context) er
 // not. Returns "" (no error) when the gateway is not running, which the caller
 // treats as a retryable no-op.
 //
-// The name fallback exists only for a stack deployed before deploy/compose.yaml
+// The name fallback exists only for a stack deployed before examples/compose/compose.yaml
 // carried platform labels. It is load-bearing during that upgrade window — an
 // unlabeled gateway must still be found, or clustered apps lose public ingress —
 // so it warns rather than failing, and says what to do about it.

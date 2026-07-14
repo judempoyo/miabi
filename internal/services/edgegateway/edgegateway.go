@@ -34,13 +34,7 @@ var ErrInvalidConfig = errors.New("gateway config is not valid YAML")
 
 const (
 	// ContainerName is the gateway container's name on the node.
-	ContainerName = "mb-node-gateway"
-	// CentralContainerName is the compose-managed central gateway's container name
-	// on the manager (pinned by deploy/compose.yaml). It is distinct from
-	// ContainerName ("mb-node-gateway"), which names gateways Miabi deploys on
-	// remote edge nodes — the central manager gateway is the compose `gateway`
-	// service, not a Miabi-deployed edge gateway. Discovery prefers the role label
-	// (CentralRoleValue) and falls back to this name.
+	ContainerName        = "mb-node-gateway"
 	CentralContainerName = "miabi-gateway"
 	// CentralRoleValue is the docker.LabelRole value the compose gateway carries so
 	// Miabi can find it by identity regardless of the compose project name.

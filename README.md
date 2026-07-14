@@ -264,90 +264,43 @@ proxy that needs only an outbound connection and the local Docker socket.
 
 ## Quick Start
 
-Miabi runs as four containers — the control plane, PostgreSQL, Redis and the Goma
-gateway. **The installer builds them itself**, straight against the Docker API; it does
-not use Docker Compose.
-
-Compose owns what Compose created: a container Miabi recreated out-of-band would be
-silently reverted by the next `docker compose up -d`, so a Compose-managed Miabi could
-never truthfully update itself. Miabi owns these containers
-(`io.miabi.managed-by=miabi`), which is what makes `miabi update` — replacing even its
-own container, with rollback — possible.
-
-### One-line install (production)
-
 ```bash
 curl -fsSL https://get.miabi.io | sudo MIABI_DOMAIN=miabi.example.com \
-  MIABI_ACME_EMAIL=you@example.com bash
+  MIABI_ADMIN_EMAIL=you@example.com bash
 ```
 
-Installs Docker if missing, brings the stack up, writes `/etc/miabi/stack.yaml`, and
-prints the admin password. Then manage it with the `miabi-stack` wrapper it leaves
-behind:
+Installs Docker if missing, brings up the stack, and prints the admin password.
+Then:
 
 ```bash
-miabi-stack status                     # what is running, and its health
-miabi-stack restart                    # restart the stack, or one component
-MIABI_TAG=1.5.0 miabi-stack update     # roll forward (rolls back if it fails)
-miabi-stack uninstall                  # keeps your data; add --volumes to destroy it
+miabi-stack status
+miabi-stack restart
+miabi-stack update
+miabi-stack uninstall
 ```
 
-> [!NOTE]
-> The installer refuses to run on a host that already runs Miabi under Compose: the two
-> do not share volumes (`miabi_pgdata` vs `mb-platform-pgdata`), so it would create an
-> empty database beside your real one. Stay on Compose with
-> `docker compose pull && docker compose up -d`, or back up, `docker compose down`, and
-> re-run with `MIABI_FORCE_STACK=1`.
+### Without the script
 
-### `docker run` (no script)
-
-There is **no binary to install** — the Miabi image *is* the installer, since its
-entrypoint is the `miabi` binary. A full install is one command:
+The Miabi image *is* the installer — there is no binary to install:
 
 ```bash
 docker run --rm -it \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /etc/miabi:/etc/miabi \
-  miabi/miabi:1.4.0 install --domain miabi.example.com
+  miabi/miabi:1.4.0 install --domain miabi.example.com --admin-email you@example.com
 ```
 
-The tag you invoke is the version you get: the image asks Docker for its own image
-reference, so a private registry works exactly like Docker Hub. `update`, `restart`,
-`status` and `uninstall` are the same command with a different verb — and because the
-installer is an *ephemeral* container, it can replace the control plane without killing
-itself.
+`install`, `update`, `restart`, `status` and `uninstall` are the same command with a
+different verb.
 
-> [!WARNING]
-> Do not omit `-v /etc/miabi:/etc/miabi`. Miabi refuses to install without it: the
-> manifest — the only copy of your database password and encryption key — would be
-> written inside the throwaway container and lost when it exits.
+**[Installation docs](https://miabi.io/docs/getting-started/installation)** — options,
+the `/etc/miabi/stack.yaml` manifest, the built-in registry, custom gateway config, and
+running Miabi under Docker Compose instead.
 
-Docker must already be installed for this path; the installer script is what installs
-it for you.
+### Docker Compose
 
-### Docker Compose (manual)
-
-```bash
-git clone https://github.com/miabi-io/miabi.git && cd miabi/deploy
-cp .env.example .env   # fill in secrets + domain (openssl rand -hex 32)
-# Shared app network — created once with a roomy CIDR so it isn't capped by
-# Docker's small default pool. (The one-line install.sh does this for you.)
-docker network create --driver bridge --subnet 10.63.0.0/16 miabi
-docker compose up -d   # uses compose.yaml
-```
-
-Want the optional pieces (built-in registry, one-click wildcard app URLs,
-externalized log volume, scale-out worker) wired up in one place? See the
-full-featured [`examples/compose/`](./examples/compose/) stack.
-
-Open the dashboard at your configured domain (`https://$MIABI_DOMAIN`) once DNS
-resolves and Goma has issued a certificate. A platform admin is seeded from your
-env — default credentials:
-
-```
-Email:    admin@example.com
-Password: admin@1234   # change it after first login
-```
+Prefer to drive Compose yourself? [`examples/compose/`](./examples/compose/) brings up the same
+stack — see the [installation docs](https://miabi.io/docs/getting-started/installation#manual-install-with-docker-compose).
 
 ### Local development
 

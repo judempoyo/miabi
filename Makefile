@@ -76,7 +76,7 @@ docker-agent: ## Build the node agent Docker image
 	docker build -f Dockerfile.agent -t $(AGENT_IMAGE):$(VERSION) -t $(AGENT_IMAGE):latest .
 
 compose-up: ## Start local dev stack (builds app + Postgres + Redis)
-	docker compose -f deploy/compose.dev.yaml up -d
+	docker compose -f compose.dev.yaml up -d
 
 compose-down: ## Stop local dev stack
-	docker compose -f deploy/compose.dev.yaml down
+	docker compose -f compose.dev.yaml down

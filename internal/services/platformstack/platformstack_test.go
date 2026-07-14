@@ -15,17 +15,18 @@ import (
 )
 
 // The CLI seeds this file into the gateway's config volume; the Compose path
-// bind-mounts deploy/goma/goma.yml. They must be the same file, or the two install
-// paths route differently — and the one nobody is running is the one that rots.
+// bind-mounts examples/compose/goma.yml. They must be the same file, or the two
+// install paths route differently — and the one nobody is running is the one that
+// rots.
 func TestEmbeddedGomaConfigMatchesTheComposeOne(t *testing.T) {
-	onDisk, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "goma", "goma.yml"))
+	onDisk, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "compose", "goma.yml"))
 	if err != nil {
-		t.Fatalf("read deploy/goma/goma.yml: %v", err)
+		t.Fatalf("read examples/compose/goma.yml: %v", err)
 	}
 	if !bytes.Equal(bytes.TrimSpace(onDisk), bytes.TrimSpace(GomaConfig())) {
-		t.Error("assets/goma.yml has drifted from deploy/goma/goma.yml — " +
+		t.Error("assets/goma.yml has drifted from examples/compose/goma.yml — " +
 			"the CLI install and the Compose install would serve different routing rules. " +
-			"Copy deploy/goma/goma.yml over internal/services/platformstack/assets/goma.yml.")
+			"Copy examples/compose/goma.yml over internal/services/platformstack/assets/goma.yml.")
 	}
 }
 

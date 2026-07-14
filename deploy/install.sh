@@ -20,7 +20,7 @@
 # `miabi update` — including replacing its own container, with rollback — possible.
 #
 # Compose is still supported for anyone who wants to drive it themselves:
-# deploy/compose.yaml is unchanged. This script simply no longer does it for you, and
+# examples/compose/compose.yaml is unchanged. This script simply no longer does it for you, and
 # it refuses to install alongside an existing Compose stack (they do not share volumes).
 #
 # It leaves behind a `miabi-stack` wrapper:
@@ -78,7 +78,7 @@ SKIP_DOCKER_INSTALL="${MIABI_SKIP_DOCKER_INSTALL:-0}"
 # The single place every image is pinned. CI bumps these on release (see
 # .github/workflows/release.yml) and they are passed straight to `miabi install`, so
 # the manifest it writes records exactly what this release was tested against.
-MIABI_VERSION="${MIABI_VERSION:-v1.3.0}"
+MIABI_VERSION="${MIABI_VERSION:-v1.4.0}"
 GOMA_VERSION="${GOMA_VERSION:-v0.11.0}"
 RUNNER_VERSION="${RUNNER_VERSION:-v0.0.7}"
 
@@ -430,16 +430,19 @@ install_stack() {
   local domain acme admin image
   domain="$(prompt MIABI_DOMAIN 'Panel domain (e.g. miabi.example.com)' '')"
   [ -n "$domain" ] || die "MIABI_DOMAIN is required: pass it as MIABI_DOMAIN=miabi.example.com (answering a prompt over a pipe is unreliable)."
-  acme="$(prompt MIABI_ACME_EMAIL "Let's Encrypt contact email" "admin@${domain}")"
-  # Only pass --admin-email when the operator actually set one. The two addresses fall
-  # back to each other inside `miabi install`, so defaulting admin to acme HERE would
-  # duplicate that rule in shell — and the two copies would drift.
-  admin="${MIABI_ADMIN_EMAIL:-}"
+  # Neither email is defaulted here. `miabi install` owns the whole rule: the two
+  # addresses fall back to each other, and admin@<domain> is the last resort. Defaulting
+  # either one in shell would defeat that fallback — an operator who set only
+  # MIABI_ADMIN_EMAIL would silently get admin@<domain> as their Let's Encrypt contact,
+  # because we'd have handed the stack a value it has no way to tell from a real choice.
+  acme="$(prompt MIABI_ACME_EMAIL "Let's Encrypt contact email (blank = admin email)" '')"
+  admin="$(prompt MIABI_ADMIN_EMAIL "First admin's email (blank = admin@${domain})" '')"
   image="miabi/miabi:${MIABI_IMAGE_TAG}"
 
   # Optional flags, built as an array so an unset one contributes nothing (an empty
   # string would arrive as a stray "" argument).
   local extra=()
+  [ -n "$acme" ] && extra+=(--acme-email "$acme")
   [ -n "$admin" ] && extra+=(--admin-email "$admin")
 
   # Built-in registry. Declining leaves the keys out of the manifest entirely — any
@@ -490,7 +493,6 @@ install_stack() {
     -v "${STACK_ETC}:/etc/miabi" \
     "$image" install \
       --domain "$domain" \
-      --acme-email "$acme" \
       --gateway-image "jkaninda/goma-gateway:${GOMA_IMAGE_TAG}" \
       --runner-image "miabi/runner:${RUNNER_IMAGE_TAG}" \
       ${extra[@]+"${extra[@]}"} \
