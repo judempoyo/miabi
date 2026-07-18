@@ -105,16 +105,6 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    id: 'analytics',
-    title: 'Analytics',
-    items: [
-      { name: 'Overview', path: '/analytics', icon: 'mdi-chart-areaspline', requiresWorkspace: true },
-      { name: 'HTTP Traffic', path: '/analytics/http', icon: 'mdi-earth', requiresWorkspace: true },
-      { name: 'Performance', path: '/analytics/performance', icon: 'mdi-speedometer', requiresWorkspace: true },
-      { name: 'Web Analytics', path: '/analytics/web', icon: 'mdi-account-group-outline', requiresWorkspace: true },
-    ],
-  },
-  {
     id: 'sources',
     title: 'Sources',
     items: [
