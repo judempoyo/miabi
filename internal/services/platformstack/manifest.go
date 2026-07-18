@@ -101,6 +101,11 @@ type Manifest struct {
 	// state, and writing it into stack.yaml would make the manifest wrong the moment it
 	// were used from somewhere else.
 	gatewayHostConfig string `yaml:"-"`
+	// gatewayHostGeoIP is the GeoIP database's host path (as the daemon sees it),
+	// resolved by EnsureGatewayConfig when a database is present/provisioned. Empty
+	// when GeoIP is off or unavailable — the gateway simply mounts no database and
+	// analytics runs without country. Not serialized, for the same reason as above.
+	gatewayHostGeoIP string `yaml:"-"`
 }
 
 type NetworkConfig struct {

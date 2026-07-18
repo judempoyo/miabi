@@ -44,6 +44,13 @@ var presets = []Preset{
 		Rule:        map[string]any{"action": "ALLOW", "sourceRanges": []any{}},
 	},
 	{
+		Key:         "geo-allowlist",
+		DisplayName: "Country allowlist",
+		Description: "Allow only the countries you specify; block the rest. Needs a GeoIP database on the gateway.",
+		Type:        "geoBlock",
+		Rule:        map[string]any{"action": "ALLOW", "countries": []any{}, "allowUnknown": true},
+	},
+	{
 		Key:         "body-limit",
 		DisplayName: "Limit request body (10MB)",
 		Description: "Reject requests with a body larger than 10MB.",

@@ -65,6 +65,16 @@ const navSections: NavSection[] = [
     items: [{ name: 'Dashboard', path: '/', icon: 'mdi-view-dashboard-outline' }],
   },
   {
+    id: 'analytics',
+    title: 'Analytics',
+    items: [
+      { name: 'Overview', path: '/analytics', icon: 'mdi-chart-areaspline', requiresWorkspace: true },
+      { name: 'HTTP Traffic', path: '/analytics/http', icon: 'mdi-earth', requiresWorkspace: true },
+      { name: 'Performance', path: '/analytics/performance', icon: 'mdi-speedometer', requiresWorkspace: true },
+      { name: 'Web Analytics', path: '/analytics/web', icon: 'mdi-account-group-outline', requiresWorkspace: true },
+    ],
+  },
+  {
     id: 'deploy',
     title: 'Deploy',
     items: [
@@ -92,6 +102,16 @@ const navSections: NavSection[] = [
       { name: 'Routes', path: '/routes', icon: 'mdi-routes', requiresWorkspace: true },
       { name: 'Middlewares', path: '/middlewares', icon: 'mdi-tune-vertical', requiresWorkspace: true },
       { name: 'Certificates', path: '/certificates', icon: 'mdi-certificate', requiresWorkspace: true },
+    ],
+  },
+  {
+    id: 'analytics',
+    title: 'Analytics',
+    items: [
+      { name: 'Overview', path: '/analytics', icon: 'mdi-chart-areaspline', requiresWorkspace: true },
+      { name: 'HTTP Traffic', path: '/analytics/http', icon: 'mdi-earth', requiresWorkspace: true },
+      { name: 'Performance', path: '/analytics/performance', icon: 'mdi-speedometer', requiresWorkspace: true },
+      { name: 'Web Analytics', path: '/analytics/web', icon: 'mdi-account-group-outline', requiresWorkspace: true },
     ],
   },
   {

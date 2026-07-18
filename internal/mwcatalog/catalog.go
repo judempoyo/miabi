@@ -317,6 +317,32 @@ var registry = []Descriptor{
 			}},
 		},
 	},
+	{
+		Type:        "geoBlock",
+		DisplayName: "Country access policy (GeoIP)",
+		Description: "Allow or deny requests by client country (GeoIP), with optional country-header enrichment for the backend.",
+		Category:    CategorySecurity,
+		Fields: []Field{
+			{Key: "action", Label: "Action", Type: FieldEnum, Required: true, Options: []string{"ALLOW", "DENY"}, Default: "ALLOW", Help: "ALLOW = allowlist (only these countries pass); DENY = blocklist."},
+			{Key: "countries", Label: "Countries", Type: FieldStrings, Required: true, Help: "ISO 3166-1 alpha-2 codes, e.g. US, FR, DE."},
+			{Key: "allowUnknown", Label: "Allow unknown country", Type: FieldBool, Default: true, Help: "When the country can't be resolved (no GeoIP database, private IP), allow the request. Off = block (fail-closed)."},
+			{Key: "addCountryHeader", Label: "Add country header", Type: FieldString, Help: "Inject the resolved country to the backend under this header, e.g. X-Country-Code."},
+			{Key: "statusCode", Label: "Status code", Type: FieldInt, Default: 403, Help: "HTTP status returned for a blocked request."},
+			{Key: "message", Label: "Message", Type: FieldString, Help: "Response body for a blocked request."},
+		},
+		// Requires a GeoIP database on the gateway (GOMA_GEOIP_DB); Miabi provisions
+		// GeoLite2-Country.mmdb during stack install.
+		Validate: func(rule map[string]any) error {
+			raw, _ := rule["countries"].([]any)
+			for _, c := range raw {
+				s, _ := c.(string)
+				if len(strings.TrimSpace(s)) != 2 {
+					return fmt.Errorf("%w: country %q must be an ISO 3166-1 alpha-2 code (e.g. US)", ErrInvalidRule, s)
+				}
+			}
+			return nil
+		},
+	},
 }
 
 var byType = func() map[string]Descriptor {

@@ -34,6 +34,7 @@ const (
 	gomaConfigDir  = "/etc/goma"
 	gomaConfigFile = gomaConfigDir + "/goma.yml"
 	gomaProviders  = gomaConfigDir + "/providers"
+	gomaGeoIPFile  = gomaConfigDir + "/GeoLite2-Country.mmdb" // matches Goma's GOMA_GEOIP_DB default
 )
 
 // postgresSpec — the platform database.
@@ -247,6 +248,14 @@ func gatewaySpec(m *Manifest, name, image string) docker.RunSpec {
 	if m.gatewayHostConfig != "" {
 		spec.Binds = append(spec.Binds, docker.BindMount{
 			Source: m.gatewayHostConfig, Target: gomaConfigFile, ReadOnly: true,
+		})
+	}
+	// The GeoIP database (optional), read-only, so Goma resolves client countries
+	// for workspace analytics. Only bound when provisioned (EnsureGatewayConfig) —
+	// binding a missing path would make Docker create a directory there.
+	if m.gatewayHostGeoIP != "" {
+		spec.Binds = append(spec.Binds, docker.BindMount{
+			Source: m.gatewayHostGeoIP, Target: gomaGeoIPFile, ReadOnly: true,
 		})
 	}
 	// The operator's own variables — anything their config interpolates, plus
