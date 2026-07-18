@@ -91,6 +91,7 @@ func Run(db *gorm.DB) error {
 		&models.PipelineStepRun{},
 		&models.Runner{},
 		&models.RunnerLease{},
+		&models.AnalyticsRollup{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}

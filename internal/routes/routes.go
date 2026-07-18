@@ -135,6 +135,7 @@ type routerHandlers struct {
 	backupSettings *handlers.WorkspaceBackupSettingsHandler
 	volumeBackup   *handlers.VolumeBackupHandler
 	monitoring     *handlers.MonitoringHandler
+	analytics      *handlers.AnalyticsHandler
 	marketplace    *handlers.MarketplaceHandler
 	registry       *handlers.RegistryHandler
 	gitRepo        *handlers.GitRepositoryHandler
@@ -895,6 +896,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 			backupSettings: handlers.NewWorkspaceBackupSettingsHandler(backupSettingsService, auditLogger),
 			volumeBackup:   handlers.NewVolumeBackupHandler(volumeBackupService, volumeRepo, volumeBackupRepo, auditLogger),
 			monitoring:     handlers.NewMonitoringHandler(monitoringService),
+			analytics:      handlers.NewAnalyticsHandler(repositories.NewAnalyticsRepository(db), ee),
 			marketplace:    handlers.NewMarketplaceHandler(marketplaceService, auditLogger),
 			registry:       handlers.NewRegistryHandler(registryService, auditLogger),
 			gitRepo:        handlers.NewGitRepositoryHandler(gitRepoService, auditLogger),

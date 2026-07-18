@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -117,7 +118,7 @@ func runServer(cli *okapicli.CLI) {
 			}
 
 			// Background job producer (asynq over Redis).
-			res.producer = worker.NewProducer(cfg.Redis.Addr, cfg.Redis.Password, cfg.WorkerMaxRetries)
+			res.producer = worker.NewProducer(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.WorkerMaxRetries)
 
 			// Docker engine adapter + local node bootstrap (network, status).
 			dockerClient, err := docker.New()
@@ -412,6 +413,20 @@ func runServer(cli *okapicli.CLI) {
 			// enables/disables cluster mode or swarm membership changes out of band.
 			go clusterService.RefreshLoop(eventCtx, 30*time.Second)
 
+			// Workspace Analytics: roll up Goma's per-request event stream into
+			// minute buckets. Runs on the embedded worker; a standalone worker joins
+			// the same consumer group so events are still rolled up exactly once.
+			if cfg.AnalyticsEnabled {
+				analyticsConsumer := worker.NewAnalyticsConsumer(
+					res.redis,
+					repositories.NewRouteRepository(res.db),
+					repositories.NewAnalyticsRepository(res.db),
+					cfg.AnalyticsStream, analyticsConsumerName("server"),
+					time.Duration(cfg.AnalyticsFlushSeconds)*time.Second, analyticsRetention(cfg, edition),
+				)
+				go analyticsConsumer.Run(eventCtx)
+			}
+
 			// Backup scheduler (cron) — runs scheduled database backups.
 			backupRepo := repositories.NewBackupRepository(res.db)
 			backupService := backup.NewService(backupRepo, dbRepo, nodeClients)
@@ -472,7 +487,7 @@ func runServer(cli *okapicli.CLI) {
 			// The embedded worker runs in the same process as the agent + runner
 			// tunnels, so it is the only worker that consumes the remote-node queue
 			// and the only one that dispatches to runners.
-			res.worker = worker.NewServer(cfg.Redis.Addr, cfg.Redis.Password, cfg.WorkerConcurrency, true)
+			res.worker = worker.NewServer(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.WorkerConcurrency, true)
 			if err := res.worker.Start(worker.NewMux(deployHandler, provisionHandler, upgradeHandler, fanoutHandler, webhookHandler, channelHandler, jobHandler, volumeBackupHandler, pipelineHandler, platformBackupHandler)); err != nil {
 				logger.Fatal("failed to start embedded worker", "error", err)
 			}
@@ -525,6 +540,27 @@ func runServer(cli *okapicli.CLI) {
 func installIDOf(db *gorm.DB) string {
 	id, _ := dbstorage.EnsureInstallID(db)
 	return id
+}
+
+// analyticsConsumerName builds this process's unique name within the analytics
+// consumer group (role + hostname), so pending-message ownership is per-process
+// when several workers share the group.
+func analyticsConsumerName(role string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "node"
+	}
+	return role + "-" + host
+}
+
+// analyticsRetention returns a resolver for the effective analytics retention in
+// days: the operator's MIABI_ANALYTICS_RETENTION_DAYS bounded by the license cap
+// (Community clamps to enterprise.CommunityAnalyticsRetentionDays). Evaluated per
+// prune so a license install/expiry takes effect without a restart.
+func analyticsRetention(cfg *config.Config, edition enterprise.EE) func() int {
+	return func() int {
+		return enterprise.ClampAnalyticsRetention(cfg.AnalyticsRetentionDays, edition.Entitlements().AnalyticsRetentionDays())
+	}
 }
 
 func shutdownServer(res *serverResources) {

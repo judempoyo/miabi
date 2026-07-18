@@ -8,9 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/miabi-io/miabi/internal/docker"
 	"github.com/miabi-io/miabi/internal/selfcontainer"
@@ -89,7 +92,90 @@ func (s *Service) EnsureGatewayConfig(ctx context.Context, m *Manifest) error {
 		return err
 	}
 	m.gatewayHostConfig = host
+	s.ensureGeoIP(ctx, m)
 	return s.validateGatewayConfig(ctx, m, host)
+}
+
+const (
+	// DefaultGeoIPFile is the GeoIP database's name beside goma.yml. Goma reads it
+	// at /etc/goma/GeoLite2-Country.mmdb (its GOMA_GEOIP_DB default).
+	DefaultGeoIPFile = "GeoLite2-Country.mmdb"
+	// DefaultGeoIPURL is the auto-updated GeoLite2-Country mirror. MaxMind's own
+	// endpoint needs a license key; this mirror does not. Override MIABI_GEOIP_URL.
+	DefaultGeoIPURL = "https://github.com/P3TERX/GeoLite.mmdb/releases/download/2026.07.16/GeoLite2-Country.mmdb"
+)
+
+// ensureGeoIP provisions the GeoIP database beside goma.yml so Goma can resolve
+// client countries for workspace analytics. Best-effort — it never fails the
+// install; on any problem, country enrichment simply stays off. Controlled by:
+//
+//	MIABI_GEOIP=off       skip entirely
+//	MIABI_GEOIP_URL=<url>  download source (default: the P3TERX GeoLite mirror)
+//
+// An existing file — a prior install, or one the operator supplied (air-gapped,
+// or a licensed MaxMind/IP2Location .mmdb) — is used as-is and never re-downloaded.
+func (s *Service) ensureGeoIP(ctx context.Context, m *Manifest) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("MIABI_GEOIP")), "off") {
+		s.log("GeoIP: disabled (MIABI_GEOIP=off) — analytics runs without country")
+		return
+	}
+	path := filepath.Join(filepath.Dir(s.manifestPath), DefaultGeoIPFile)
+	if _, err := os.Stat(path); err == nil {
+		m.gatewayHostGeoIP = s.hostPathFor(ctx, path) // already present — use it
+		return
+	}
+	url := strings.TrimSpace(os.Getenv("MIABI_GEOIP_URL"))
+	if url == "" {
+		url = DefaultGeoIPURL
+	}
+	s.log("GeoIP: downloading %s", DefaultGeoIPFile)
+	if err := downloadFile(ctx, url, path); err != nil {
+		s.log("GeoIP: download failed (%v) — country enrichment stays off; set MIABI_GEOIP_URL, "+
+			"drop a .mmdb at %s, or set MIABI_GEOIP=off to silence this", err, s.hostPathFor(ctx, path))
+		return
+	}
+	s.log("GeoIP: ready at %s", s.hostPathFor(ctx, path))
+	m.gatewayHostGeoIP = s.hostPathFor(ctx, path)
+}
+
+// downloadFile fetches url into dst atomically (temp file + rename, so the
+// gateway never reads a half-written database), with a bounded timeout so a slow
+// mirror can't hang the install.
+func downloadFile(ctx context.Context, url, dst string) error {
+	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "miabi-installer")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", url, resp.Status)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return err
+	}
+	tmp := dst + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	return os.Rename(tmp, dst)
 }
 
 // validateGatewayConfig runs `goma config check` before the gateway is ever started.

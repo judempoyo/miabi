@@ -60,6 +60,12 @@ func TestValidate(t *testing.T) {
 		{"userAgentBlock missing list", "userAgentBlock", map[string]any{}, true},
 		{"userAgentBlock wrong type", "userAgentBlock", map[string]any{"userAgents": "curl"}, true},
 		{"userAgentBlock unknown key", "userAgentBlock", map[string]any{"userAgents": []any{"curl"}, "bogus": 1}, true},
+		{"geoBlock valid", "geoBlock", map[string]any{"action": "ALLOW", "countries": []any{"US", "FR"}}, false},
+		{"geoBlock full", "geoBlock", map[string]any{"action": "DENY", "countries": []any{"CN"}, "allowUnknown": false, "addCountryHeader": "X-Country-Code", "statusCode": float64(451), "message": "no"}, false},
+		{"geoBlock missing countries", "geoBlock", map[string]any{"action": "ALLOW"}, true},
+		{"geoBlock bad country code", "geoBlock", map[string]any{"action": "ALLOW", "countries": []any{"USA"}}, true},
+		{"geoBlock bad action", "geoBlock", map[string]any{"action": "MAYBE", "countries": []any{"US"}}, true},
+		{"geoBlock unknown key", "geoBlock", map[string]any{"action": "ALLOW", "countries": []any{"US"}, "bogus": 1}, true},
 		// Phase 2/3: map, list and object field types.
 		{"requestHeaders setHeaders", "requestHeaders", map[string]any{"setHeaders": map[string]any{"X-Forwarded-Proto": "https"}}, false},
 		{"requestHeaders removeHeaders only", "requestHeaders", map[string]any{"removeHeaders": []any{"Authorization"}}, false},

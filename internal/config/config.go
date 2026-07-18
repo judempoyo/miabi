@@ -148,6 +148,17 @@ type Config struct {
 	// StorageUsageMinutes is that sweep's cadence. Default 30.
 	StorageUsageMinutes int
 
+	// AnalyticsEnabled runs the Workspace Analytics consumer: it reads Goma's
+	// per-request event stream and rolls it up into minute buckets. Default on.
+	AnalyticsEnabled bool
+	// AnalyticsStream is the Redis stream Goma writes request events to (its
+	// GOMA_ANALYTICS_STREAM). Must match the gateway's setting.
+	AnalyticsStream string
+	// AnalyticsFlushSeconds is how often the consumer persists closed buckets.
+	AnalyticsFlushSeconds int
+	// AnalyticsRetentionDays bounds how long rollups are kept before pruning.
+	AnalyticsRetentionDays int
+
 	// ACMEDirectoryURL is the ACME CA directory Miabi issues managed (DNS-01)
 	// certificates from. Empty = Let's Encrypt production. Point it at the LE
 	// staging directory for testing so issuance never burns prod rate limits.
@@ -344,6 +355,7 @@ type RedisConfig struct {
 	Client   *redis.Client
 	Addr     string
 	Password string
+	DB       int // Redis database index (MIABI_REDIS_DB); must match Goma's GOMA_REDIS_DB for analytics
 }
 
 // RegistryConfig is the boot-authoritative config for the built-in registry. A
@@ -416,6 +428,7 @@ func New() *Config {
 		Redis: RedisConfig{
 			Addr:     goutils.Env("MIABI_REDIS_ADDR", "localhost:6379"),
 			Password: goutils.Env("MIABI_REDIS_PASSWORD", ""),
+			DB:       goutils.EnvInt("MIABI_REDIS_DB", 0),
 		},
 		Env:                   goutils.Env("MIABI_ENV", "dev"),
 		Port:                  goutils.EnvInt("MIABI_PORT", 9000),
@@ -466,6 +479,10 @@ func New() *Config {
 		DNSReconcileMinutes:        goutils.EnvInt("MIABI_DNS_RECONCILE_MINUTES", 30),
 		StorageUsageEnabled:        goutils.EnvBool("MIABI_STORAGE_USAGE_ENABLED", true),
 		StorageUsageMinutes:        goutils.EnvInt("MIABI_STORAGE_USAGE_MINUTES", 60),
+		AnalyticsEnabled:           goutils.EnvBool("MIABI_ANALYTICS_ENABLED", true),
+		AnalyticsStream:            goutils.Env("MIABI_ANALYTICS_STREAM", "goma:analytics"),
+		AnalyticsFlushSeconds:      goutils.EnvInt("MIABI_ANALYTICS_FLUSH_SECONDS", 15),
+		AnalyticsRetentionDays:     goutils.EnvInt("MIABI_ANALYTICS_RETENTION_DAYS", 90),
 		ACMEDirectoryURL:           goutils.Env("MIABI_ACME_DIRECTORY_URL", ""),
 		CertRenewDays:              goutils.EnvInt("MIABI_CERT_RENEW_DAYS", 30),
 		KeyAutoRotate:              goutils.EnvBool("MIABI_KEY_AUTO_ROTATE", false),
@@ -780,7 +797,7 @@ func (c *Config) InitStorage() {
 	}
 	c.Database.DB = db
 
-	rdb, err := storage.NewRedis(c.Redis.Addr, c.Redis.Password)
+	rdb, err := storage.NewRedis(c.Redis.Addr, c.Redis.Password, c.Redis.DB)
 	if err != nil {
 		logger.Fatal("failed to connect to redis", "error", err)
 	}
