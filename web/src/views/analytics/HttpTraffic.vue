@@ -5,6 +5,8 @@ import WorldMap from '@/components/WorldMap.vue'
 import type { AnalyticsReport } from '@/api/analytics'
 import { fmtNum } from './format'
 
+const GEOIP_DOCS = 'https://docs.miabi.io/docs/operations/analytics#geoip-database'
+
 function statusTotal(r: AnalyticsReport): number {
   const s = r.status
   return Math.max(1, s.s2xx + s.s3xx + s.s4xx + s.s5xx)
@@ -20,13 +22,25 @@ function statusTotal(r: AnalyticsReport): number {
       </div>
       <div class="card-body">
         <WorldMap v-if="report.web.top_countries.length" :countries="report.web.top_countries" />
-        <p v-else class="a-muted">No country data yet. Country enrichment needs the GeoIP database mounted on the gateway (GOMA_GEOIP_DB).</p>
+        <!-- Miabi ships no GeoIP database (licensing — see docs), so for most installs this
+             empty state IS the setup instructions. Keep it actionable: the path and the link
+             are the whole point. -->
+        <div v-else class="empty-state">
+          <h3>No country data yet</h3>
+          <p>
+            Resolving countries needs a GeoIP database on the gateway. Put one at
+            <code>/etc/miabi/country.mmdb</code> and restart the gateway.
+          </p>
+          <p>
+            <a :href="GEOIP_DOCS" target="_blank" rel="noopener">Where to get one →</a>
+          </p>
+        </div>
       </div>
     </div>
 
     <div class="break-grid">
       <Breakdown title="Top countries" :items="report.web.top_countries" kind="country"
-        empty-hint="Country data needs the GeoIP database on the gateway." />
+        empty-hint="Needs a GeoIP database at /etc/miabi/country.mmdb — see the map above." />
       <Breakdown title="HTTP methods" :items="report.web.top_methods" />
 
       <div class="card">

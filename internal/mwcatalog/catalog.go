@@ -330,8 +330,9 @@ var registry = []Descriptor{
 			{Key: "statusCode", Label: "Status code", Type: FieldInt, Default: 403, Help: "HTTP status returned for a blocked request."},
 			{Key: "message", Label: "Message", Type: FieldString, Help: "Response body for a blocked request."},
 		},
-		// Requires a GeoIP database on the gateway (GOMA_GEOIP_DB); Miabi provisions
-		// GeoLite2-Country.mmdb during stack install.
+		// Requires a GeoIP database on the gateway (GOMA_GEOIP_DB). Miabi does not
+		// install one — the operator drops country.mmdb beside goma.yml. Without it
+		// no country resolves, so every rule here falls through to allowUnknown.
 		Validate: func(rule map[string]any) error {
 			raw, _ := rule["countries"].([]any)
 			for _, c := range raw {

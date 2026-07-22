@@ -34,7 +34,10 @@ const (
 	gomaConfigDir  = "/etc/goma"
 	gomaConfigFile = gomaConfigDir + "/goma.yml"
 	gomaProviders  = gomaConfigDir + "/providers"
-	gomaGeoIPFile  = gomaConfigDir + "/GeoLite2-Country.mmdb" // matches Goma's GOMA_GEOIP_DB default
+	// Goma's GOMA_GEOIP_DB default. The name is historical on Goma's side; whatever
+	// MMDB database Miabi provisions is bound here, so the default keeps working
+	// without Miabi having to set the variable and take it away from operators.
+	gomaGeoIPFile = gomaConfigDir + "/GeoLite2-Country.mmdb"
 )
 
 // postgresSpec — the platform database.
