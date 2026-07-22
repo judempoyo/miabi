@@ -15,7 +15,11 @@ import (
 
 // Scan cadence and TLS thresholds.
 const (
-	scanInterval       = 30 * time.Minute
+	scanInterval = 30 * time.Minute
+	// fastScanInterval drives the scans whose threshold is measured in minutes,
+	// where the 30-minute cadence would make "offline for 2 minutes" mean anything
+	// up to 32.
+	fastScanInterval   = time.Minute
 	certExpiryWarn     = 14 * 24 * time.Hour
 	certExpiryCritical = 3 * 24 * time.Hour
 )
@@ -38,14 +42,21 @@ func (e *Engine) ScanLoop(ctx context.Context) {
 	// A scan on start so a fresh control plane surfaces existing conditions
 	// immediately rather than after the first interval.
 	e.scan(ctx)
-	t := time.NewTicker(scanInterval)
-	defer t.Stop()
+	slow := time.NewTicker(scanInterval)
+	defer slow.Stop()
+	// The runner scan is deliberately NOT run on start: every runner is out of
+	// contact for the moment it takes them to redial a control plane that just
+	// booted, and firing on that would alert on our own restart.
+	fast := time.NewTicker(fastScanInterval)
+	defer fast.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-slow.C:
 			e.scan(ctx)
+		case <-fast.C:
+			e.fastScan(ctx)
 		}
 	}
 }
@@ -59,6 +70,13 @@ func (e *Engine) scan(ctx context.Context) {
 	}
 	if e.quota != nil {
 		e.scanQuotas(ctx)
+	}
+}
+
+// fastScan runs the minute-resolution scans.
+func (e *Engine) fastScan(ctx context.Context) {
+	if e.runners != nil {
+		e.scanRunners(ctx)
 	}
 }
 
@@ -123,7 +141,118 @@ func volName(v *models.Volume) string {
 	return v.Name
 }
 
-// --- Quotas -----------------------------------------------------------------
+// ==== Runners (CI) ==================
+
+const (
+	runnerOfflineAfter = 2 * time.Minute
+	runnerStableFor    = 2 * time.Minute
+)
+
+// RunnerLister is the scanner's view of runners (the runner repo).
+type RunnerLister interface {
+	ListAll() ([]models.Runner, error)
+}
+
+// SetRunnerLister enables the runner-reachability scan.
+func (e *Engine) SetRunnerLister(r RunnerLister) { e.runners = r }
+
+// SetSystemWorkspace supplies the built-in system workspace, which owns alerts
+// whose subject belongs to the platform rather than to one workspace.
+func (e *Engine) SetSystemWorkspace(fn func() uint) { e.sysWorkspace = fn }
+
+// scanRunners fires "runner offline" for runners out of contact for at least
+// runnerOfflineAfter, and clears it only once one is back and has stayed back for
+// runnerStableFor.
+//
+// Reachability is judged on LastSeenAt rather than Status. The heartbeat refreshes
+// last-seen every 30s, so a stale value means nothing is talking to us — which
+// remains true when a control plane killed mid-connection never ran
+// MarkDisconnected and left the row reading "online" indefinitely.
+//
+// Runners that are neither out of contact long enough nor stably back are *held*:
+// they keep whatever alert they already have without opening a new one. That is
+// what turns a flapping runner into one alert instead of a stream.
+func (e *Engine) scanRunners(ctx context.Context) {
+	all, err := e.runners.ListAll()
+	if err != nil {
+		logger.Warn("alerting: runner scan failed", "error", err)
+		return
+	}
+	now := e.now().UTC()
+	held := map[string]bool{}
+	for i := range all {
+		r := &all[i]
+		if r.Ephemeral || !r.Enabled {
+			continue
+		}
+		ws, platform := runnerAlertScope(r, e.systemWorkspace())
+		if ws == 0 {
+			// a shared runner with no system workspace to hang the alert on
+			continue
+		}
+		ref := fmt.Sprintf("runner:%d", r.ID)
+		key := signalDedup("runner_offline", ref)
+		if runnerStablyBack(r, now) {
+			continue
+		}
+		held[key] = true
+		if r.LastSeenAt == nil || now.Sub(r.LastSeenAt.UTC()) < runnerOfflineAfter {
+			continue
+		}
+		link := fmt.Sprintf("/runners/%d", r.ID)
+		if platform {
+			link = "/admin/runners"
+		}
+		e.doFire(ctx, ws, intent{
+			kind: fire, ruleKey: "runner_offline", dedupKey: key,
+			category: models.CategoryCI, severity: models.AlertWarning,
+			subjectType: "runner", subjectRef: ref, subjectLink: link,
+			minRole: models.WorkspaceRoleDeveloper, platform: platform,
+			title: "Runner offline — " + runnerName(r),
+			body:  "The runner has been out of contact for over 2 minutes; queued CI/build jobs may wait for it.",
+		})
+	}
+	e.resolveStale(ctx, models.CategoryCI, "runner_offline:", held)
+}
+
+// runnerAlertScope resolves who hears about a runner: a shared runner is
+// platform-scoped (system workspace → super-admins), a workspace-owned one
+// notifies its own members.
+func runnerAlertScope(r *models.Runner, sysWs uint) (workspaceID uint, platform bool) {
+	if r.Scope == models.ScopeShared || r.WorkspaceID == nil {
+		return sysWs, true
+	}
+	return *r.WorkspaceID, false
+}
+
+// runnerStablyBack reports whether a runner is connected now and has been for
+// runnerStableFor — the bar for clearing its alert.
+func runnerStablyBack(r *models.Runner, now time.Time) bool {
+	if r.Status == models.RunnerStatusOffline || r.ConnectedSince == nil {
+		return false
+	}
+	// The row claims a connection; the heartbeat has to agree.
+	if r.LastSeenAt == nil || now.Sub(r.LastSeenAt.UTC()) >= runnerOfflineAfter {
+		return false
+	}
+	return now.Sub(r.ConnectedSince.UTC()) >= runnerStableFor
+}
+
+func runnerName(r *models.Runner) string {
+	if r.DisplayName != "" {
+		return r.DisplayName
+	}
+	return r.Name
+}
+
+func (e *Engine) systemWorkspace() uint {
+	if e.sysWorkspace == nil {
+		return 0
+	}
+	return e.sysWorkspace()
+}
+
+// =========== Quotas
 
 // QuotaBreach is one workspace resource at/over the near-limit threshold.
 type QuotaBreach struct {
