@@ -131,6 +131,120 @@ func TestRunnerAlertScopes(t *testing.T) {
 	}
 }
 
+type runnerLister struct{ r []models.Runner }
+
+func (f *runnerLister) ListAll() ([]models.Runner, error) { return f.r, nil }
+
+func ago(d time.Duration) *time.Time { t := time.Now().UTC().Add(-d); return &t }
+
+// TestRunnerScanDebounce is the whole point of the runner scan: a runner that
+// drops and comes back inside the window must never reach anyone's inbox, and one
+// that flaps must not produce a resolve/re-fire pair per cycle.
+func TestRunnerScanDebounce(t *testing.T) {
+	eng, alerts, inbox, _ := newEngineDB(t)
+	ws := uint(1)
+	rl := &runnerLister{r: []models.Runner{{
+		ID: 5, Name: "build-1", WorkspaceID: &ws, Scope: models.ScopeWorkspace,
+		Enabled: true, Status: models.RunnerStatusOffline, LastSeenAt: ago(30 * time.Second),
+	}}}
+	eng.SetRunnerLister(rl)
+	run := func() { eng.scanRunners(context.Background()) }
+	active := func() int { a, _ := alerts.ListByWorkspace(1, true, 0); return len(a) }
+
+	// Offline for 30s — a restart, not an outage. Nothing said.
+	run()
+	if active() != 0 {
+		t.Fatalf("a 30s blip must not alert, %d active", active())
+	}
+
+	// Past the threshold: one alert, one notification.
+	rl.r[0].LastSeenAt = ago(3 * time.Minute)
+	run()
+	if active() != 1 {
+		t.Fatalf("want 1 alert after 3 minutes offline, got %d", active())
+	}
+	if c, _ := inbox.UnreadCount(7); c != 1 {
+		t.Fatalf("developer should have 1 notification, got %d", c)
+	}
+
+	// Back, but only just: the alert is HELD, not resolved — this is what stops a
+	// flapping runner emitting a recovered/offline pair every cycle.
+	rl.r[0].Status = models.RunnerStatusOnline
+	rl.r[0].LastSeenAt = ago(time.Second)
+	rl.r[0].ConnectedSince = ago(30 * time.Second)
+	run()
+	if active() != 1 {
+		t.Fatalf("alert must hold while the runner is only briefly back, got %d active", active())
+	}
+
+	// Stably back: resolved.
+	rl.r[0].ConnectedSince = ago(3 * time.Minute)
+	run()
+	if active() != 0 {
+		t.Fatalf("alert should clear once the runner is stably back, %d active", active())
+	}
+}
+
+// TestRunnerScanSkipsExpectedAbsence: ephemeral runners are torn down by design
+// and disabled ones were switched off on purpose — neither is news.
+func TestRunnerScanSkipsExpectedAbsence(t *testing.T) {
+	eng, alerts, _, _ := newEngineDB(t)
+	ws := uint(1)
+	long := ago(time.Hour)
+	eng.SetRunnerLister(&runnerLister{r: []models.Runner{
+		{ID: 1, Name: "ephemeral", WorkspaceID: &ws, Scope: models.ScopeWorkspace,
+			Enabled: true, Ephemeral: true, Status: models.RunnerStatusOffline, LastSeenAt: long},
+		{ID: 2, Name: "disabled", WorkspaceID: &ws, Scope: models.ScopeWorkspace,
+			Enabled: false, Status: models.RunnerStatusOffline, LastSeenAt: long},
+		{ID: 3, Name: "never-started", WorkspaceID: &ws, Scope: models.ScopeWorkspace,
+			Enabled: true, Status: models.RunnerStatusOffline}, // no LastSeenAt
+	}})
+
+	eng.scanRunners(context.Background())
+	if a, _ := alerts.ListByWorkspace(1, true, 0); len(a) != 0 {
+		t.Fatalf("expected absences must not alert, got %+v", a)
+	}
+}
+
+// TestRunnerScanSharedGoesToAdmins: a shared runner belongs to the platform, so
+// its alert lands on the system workspace and reaches super-admins.
+func TestRunnerScanSharedGoesToAdmins(t *testing.T) {
+	eng, alerts, inbox, _ := newEngineDB(t)
+	eng.SetSystemAdmins(fakeAdmins{ids: []uint{100}})
+	eng.SetSystemWorkspace(func() uint { return 999 })
+	eng.SetRunnerLister(&runnerLister{r: []models.Runner{{
+		ID: 9, Name: "shared-1", Scope: models.ScopeShared, // WorkspaceID nil
+		Enabled: true, Status: models.RunnerStatusOffline, LastSeenAt: ago(5 * time.Minute),
+	}}})
+
+	eng.scanRunners(context.Background())
+	act, _ := alerts.ListByWorkspace(999, true, 0)
+	if len(act) != 1 || act[0].DedupKey != "runner_offline:runner:9" {
+		t.Fatalf("want 1 platform runner alert, got %+v", act)
+	}
+	if c, _ := inbox.UnreadCount(100); c != 1 {
+		t.Fatalf("admin should be notified, got %d", c)
+	}
+	if c, _ := inbox.UnreadCount(7); c != 0 {
+		t.Fatalf("workspace member must not receive a shared-runner alert, got %d", c)
+	}
+}
+
+// A shared runner with no system workspace resolved has nowhere to hang its
+// alert; it must be skipped rather than written to workspace 0.
+func TestRunnerScanSkipsSharedWithoutSystemWorkspace(t *testing.T) {
+	eng, alerts, _, _ := newEngineDB(t)
+	eng.SetRunnerLister(&runnerLister{r: []models.Runner{{
+		ID: 9, Name: "shared-1", Scope: models.ScopeShared,
+		Enabled: true, Status: models.RunnerStatusOffline, LastSeenAt: ago(5 * time.Minute),
+	}}})
+
+	eng.scanRunners(context.Background())
+	if a, _ := alerts.ListByWorkspace(0, true, 0); len(a) != 0 {
+		t.Fatalf("must not alert without a system workspace, got %+v", a)
+	}
+}
+
 // TestDiskScanFireAndResolve: a volume ≥95% full fires a critical disk alert;
 // once usage drops below the warning threshold it auto-resolves.
 func TestDiskScanFireAndResolve(t *testing.T) {

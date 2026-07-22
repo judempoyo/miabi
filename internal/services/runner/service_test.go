@@ -7,7 +7,51 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/miabi-io/miabi/internal/models"
 )
+
+// TestConnectionBroke pins down when a runner's uptime clock restarts — the input
+// the offline alert debounces its resolve on. Getting this wrong in either
+// direction is a bug you only notice in production: reset too eagerly and an alert
+// never clears, too rarely and a flapping runner clears it instantly.
+func TestConnectionBroke(t *testing.T) {
+	now := time.Now()
+	at := func(d time.Duration) *time.Time { t := now.Add(-d); return &t }
+
+	cases := []struct {
+		name string
+		r    models.Runner
+		want bool
+	}{
+		{"heartbeat on a live connection", models.Runner{
+			Status: models.RunnerStatusOnline, ConnectedSince: at(time.Hour), LastSeenAt: at(20 * time.Second),
+		}, false},
+		{"draining still counts as connected", models.Runner{
+			Status: models.RunnerStatusDraining, ConnectedSince: at(time.Hour), LastSeenAt: at(20 * time.Second),
+		}, false},
+		{"reconnect after a clean disconnect", models.Runner{
+			Status: models.RunnerStatusOffline, ConnectedSince: nil, LastSeenAt: at(5 * time.Minute),
+		}, true},
+		{"first ever connection", models.Runner{
+			Status: models.RunnerStatusOffline,
+		}, true},
+		{"row says online but heartbeats stopped (control plane was killed)", models.Runner{
+			Status: models.RunnerStatusOnline, ConnectedSince: at(time.Hour), LastSeenAt: at(10 * time.Minute),
+		}, true},
+		{"one late heartbeat is not a break", models.Runner{
+			Status: models.RunnerStatusOnline, ConnectedSince: at(time.Hour), LastSeenAt: at(45 * time.Second),
+		}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := connectionBroke(&c.r, now); got != c.want {
+				t.Fatalf("connectionBroke = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
 
 func TestNormalizeLabels(t *testing.T) {
 	got := normalizeLabels([]string{"  buildkit ", "arch=amd64", "buildkit", "", "  "})

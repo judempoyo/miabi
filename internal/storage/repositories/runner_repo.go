@@ -74,6 +74,14 @@ func (r *RunnerRepository) ListShared() ([]models.Runner, error) {
 	return out, err
 }
 
+// ListAll returns every runner across all scopes — the alert scanner's view,
+// which has to reason about reachability platform-wide rather than per workspace.
+func (r *RunnerRepository) ListAll() ([]models.Runner, error) {
+	var out []models.Runner
+	err := r.db.Order("id DESC").Find(&out).Error
+	return out, err
+}
+
 // ListSchedulable returns the runners a workspace's jobs may run on: its own
 // runners plus (when includeShared) the platform-shared pool. Used by the
 // scheduler and the "waiting for a runner" surface.
