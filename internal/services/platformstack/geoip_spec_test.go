@@ -24,7 +24,7 @@ func TestGatewaySpecBindsGeoIPOnlyWhenProvisioned(t *testing.T) {
 		t.Fatal("GeoIP database bound when none was provisioned")
 	}
 
-	const host = "/etc/miabi/GeoLite2-Country.mmdb"
+	const host = "/etc/miabi/country.mmdb"
 	m.gatewayHostGeoIP = host
 	source, readOnly, found := bind()
 	if !found {

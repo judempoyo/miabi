@@ -269,6 +269,12 @@ func runServer(cli *okapicli.CLI) {
 				ws: repositories.NewWorkspaceRepository(res.db),
 			}
 			nodeManager.SetOnStatusChange(palerter.NodeStatus)
+			// Runners are scanned rather than hooked: their tunnels re-form too often
+			// for the raw event to be worth notifying on, so the engine debounces it
+			// (offline ≥2m fires, back ≥2m clears). It needs the system workspace to
+			// scope shared runners to the super-admins.
+			alertEngine.SetSystemWorkspace(palerter.systemWorkspace)
+			alertEngine.SetRunnerLister(repositories.NewRunnerRepository(res.db))
 			// The quota scan + backup-outcome alerts are wired below, once the quota
 			// service and backup service exist (they depend on it).
 			webhookRepo := repositories.NewWebhookRepository(res.db)
@@ -506,9 +512,9 @@ func runServer(cli *okapicli.CLI) {
 			})
 
 			var runnerDispatcher *runners.Dispatcher
-			var runnerManager *runners.Manager
-			res.forward, runnerDispatcher, runnerManager = routes.InitRoutes(app, res.db, res.redis, cfg, res.producer, dockerClient, nodeService, nodeManager, nodeGateway, clusterService, bus, proxyMgr, res.cron, logStore)
-			runnerManager.SetOnStatusChange(palerter.RunnerStatus)
+			// The runner manager is discarded: runner alerts come from the engine's
+			// scan (see SetRunnerLister above), not from its connect/disconnect hook.
+			res.forward, runnerDispatcher, _ = routes.InitRoutes(app, res.db, res.redis, cfg, res.producer, dockerClient, nodeService, nodeManager, nodeGateway, clusterService, bus, proxyMgr, res.cron, logStore)
 
 			// This process holds the runner tunnels, so its worker is the one that
 			// dispatches builds to runners — for both pipelines and git-source app

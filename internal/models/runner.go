@@ -95,8 +95,13 @@ type Runner struct {
 	// Connected reflects a live tunnel (transient; set by the connection manager).
 	Connected bool `json:"connected" gorm:"-"`
 
-	LastSeenAt  *time.Time `json:"last_seen_at,omitempty"`
-	CreatedByID *uint      `json:"created_by_id,omitempty"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	// ConnectedSince is when the current unbroken connection began — reset on every
+	// reconnect, cleared on disconnect. LastSeenAt cannot answer "how long has this
+	// runner been up?" because the heartbeat refreshes it every 30s; the offline
+	// alert needs that to avoid clearing on a runner that is flapping.
+	ConnectedSince *time.Time `json:"connected_since,omitempty"`
+	CreatedByID    *uint      `json:"created_by_id,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

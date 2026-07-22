@@ -39,6 +39,10 @@ var (
 // join-token prefix "mbn_" so the two token scopes never collide).
 const tokenPrefix = "mbr_"
 
+// contactLostAfter is the gap in a runner's heartbeat (30s) that counts as the
+// connection having broken, rather than one late beat. Two missed beats.
+const contactLostAfter = 90 * time.Second
+
 // Input is the mutable set of fields a create/update accepts. Scope-specific
 // fields (WorkspaceID, Scope) are set by the caller, not bound from the request.
 type Input struct {
@@ -299,6 +303,22 @@ func (s *Service) regenToken(m *models.Runner) (string, error) {
 	return token, nil
 }
 
+// connectionBroke reports whether a runner's stored state shows the previous
+// connection genuinely ended, rather than this being another heartbeat on a
+// connection that never dropped. It decides when ConnectedSince — the "how long
+// has this been up" the offline alert debounces on — restarts.
+//
+// A stale last-seen counts as a break even when the row still says "online",
+// because a control plane killed mid-connection never runs MarkDisconnected:
+// Status alone would then claim an unbroken connection that ended hours ago, and
+// a runner returning from a real outage would clear its alert instantly.
+func connectionBroke(m *models.Runner, now time.Time) bool {
+	return m.ConnectedSince == nil ||
+		m.Status == models.RunnerStatusOffline ||
+		m.LastSeenAt == nil ||
+		now.Sub(*m.LastSeenAt) > contactLostAfter
+}
+
 // MarkConnected records that a runner's tunnel is live: online status, a fresh
 // last-seen, and its self-reported platform facts. Best-effort (a missing runner
 // is ignored) so the connection manager can call it on connect and on each
@@ -312,8 +332,11 @@ func (s *Service) MarkConnected(id uint, os, arch, version, remoteIP string) {
 	if remoteIP != "" {
 		m.RemoteIP = remoteIP
 	}
-	// A cordoned runner stays cordoned (an operator hold); otherwise it goes
-	// online. Draining is a terminal-for-this-connection state set elsewhere.
+
+	if connectionBroke(m, now) {
+		m.ConnectedSince = &now
+	}
+
 	if m.Status != models.RunnerStatusDraining {
 		m.Status = models.RunnerStatusOnline
 	}
@@ -337,6 +360,7 @@ func (s *Service) MarkDisconnected(id uint) {
 		return
 	}
 	m.Status = models.RunnerStatusOffline
+	m.ConnectedSince = nil // uptime ends here; the next connection starts a new one
 	_ = s.repo.Update(m)
 }
 
@@ -402,8 +426,6 @@ func normalizeConcurrency(n int) int {
 func generateToken() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failing is fatal for a security token; surface loudly rather
-		// than mint a weak one.
 		logger.Error("runner token generation failed", "error", err)
 	}
 	return tokenPrefix + hex.EncodeToString(b)

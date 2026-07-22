@@ -115,38 +115,3 @@ func (n *platformAlerter) NodeStatus(nodeID uint, name string, online bool) {
 		Body: "The node's agent tunnel dropped; workloads scheduled on it are unreachable.",
 	})
 }
-
-// RunnerStatus emits runner_offline / runner_online signals. A shared runner is
-// platform-scoped (system workspace → super-admins); a workspace-owned runner
-// notifies its own members.
-func (n *platformAlerter) RunnerStatus(r *models.Runner, online bool) {
-	var wsID uint
-	platform := r.Scope == models.ScopeShared || r.WorkspaceID == nil
-	if platform {
-		wsID = n.systemWorkspace()
-	} else {
-		wsID = *r.WorkspaceID
-	}
-	if wsID == 0 {
-		return
-	}
-	ref := fmt.Sprintf("runner:%d", r.ID)
-	if online {
-		n.e.Emit(alerting.Signal{WorkspaceID: wsID, Kind: "runner_online", Resolve: true, SubjectRef: ref, Platform: platform})
-		return
-	}
-	name := r.DisplayName
-	if name == "" {
-		name = r.Name
-	}
-	link := fmt.Sprintf("/runners/%d", r.ID)
-	if platform {
-		link = "/admin/runners"
-	}
-	n.e.Emit(alerting.Signal{
-		WorkspaceID: wsID, Kind: "runner_offline", SubjectType: "runner", SubjectRef: ref,
-		SubjectLink: link, Severity: models.AlertWarning, Platform: platform,
-		Title: "Runner offline — " + name,
-		Body:  "The runner's tunnel dropped; queued CI/build jobs may wait for it.",
-	})
-}

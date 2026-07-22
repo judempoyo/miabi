@@ -73,6 +73,10 @@ type Engine struct {
 	certs   CertLister
 	volumes VolumeUsageLister
 	quota   QuotaLister
+	runners RunnerLister
+	// sysWorkspace resolves the built-in system workspace, which owns alerts whose
+	// subject belongs to the platform rather than to any one workspace.
+	sysWorkspace func() uint
 	// Platform-scoped alerts (category Node, …) are emitted on the system
 	// workspace and fan out to the platform super-admins instead of workspace
 	// members.
