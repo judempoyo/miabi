@@ -266,6 +266,69 @@ async function doDeleteBackup() {
     deletingBackup.value = false
   }
 }
+
+function getFileName(path: string): string {
+  return path.split('/').pop() || path
+}
+function getDepth(path: string): number {
+  const segments = path.replace(/^\/|\/$/g, '').split('/')
+  return Math.max(0, segments.length - 1)
+}
+function getFileIcon(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase()
+  switch (ext) {
+    case 'json':
+    case 'yaml':
+    case 'yml':
+    case 'env':
+      return 'mdi-code-json'
+    case 'js':
+    case 'ts':
+    case 'vue':
+    case 'go':
+    case 'php':
+      return 'mdi-file-code-outline'
+    case 'png':
+    case 'jpg':
+    case 'svg':
+      return 'mdi-file-image-outline'
+    case 'log':
+      return 'mdi-file-document-outline'
+    case 'zip':
+    case 'tar':
+    case 'gz':
+      return 'mdi-zip-box-outline'
+    default:
+      return 'mdi-file-outline'
+  }
+}
+
+const expandedFolders = ref<Set<string>>(new Set())
+
+
+function toggleFolder(path: string) {
+  if (expandedFolders.value.has(path)) {
+    expandedFolders.value.delete(path)
+  } else {
+    expandedFolders.value.add(path)
+  }
+}
+
+function isFileVisible(file: VolumeFile, allFiles: VolumeFile[]): boolean {
+  const parts = file.path.split('/').filter(Boolean)
+
+  if (parts.length <= 1) return true
+
+  let currentParent = ''
+  for (let i = 0; i < parts.length - 1; i++) {
+    currentParent += (currentParent ? '/' : '') + parts[i]
+    if (!expandedFolders.value.has(currentParent)) {
+      return false
+    }
+  }
+
+  return true
+}
 </script>
 
 <template>
@@ -382,7 +445,7 @@ async function doDeleteBackup() {
           <template v-if="ws.canEdit">
             <input
               v-model="uploadPath"
-              class="input input-sm"
+              class="form-input input-sm"
               style="width: 160px"
               aria-label="Upload subdirectory"
               placeholder="sub/dir (optional)"
@@ -401,18 +464,48 @@ async function doDeleteBackup() {
         <p>This volume is empty. Upload a file to import config or data.</p>
       </div>
       <div v-else class="table-wrapper">
-        <table>
-          <thead><tr><th>Path</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+        <table class="file-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
           <tbody>
-            <tr v-for="f in files" :key="f.path">
-              <td class="mono">
-                <span class="mdi" :class="f.is_dir ? 'mdi-folder' : 'mdi-file-outline'" style="margin-right: 6px; color: var(--text-muted)"></span>{{ f.path }}
+            <tr v-for="f in files" :key="f.path" v-show="isFileVisible(f, files)" class="row-clickable"
+              :class="{ 'is-dir': f.is_dir }" @click="f.is_dir ? toggleFolder(f.path) : null">
+              <td>
+                <div class="file-cell" :style="{ paddingLeft: `${getDepth(f.path) * 20}px` }">
+                  <span v-if="f.is_dir" class="mdi chevron-icon"
+                    :class="expandedFolders.has(f.path) ? 'mdi-chevron-down' : 'mdi-chevron-right'"></span>
+                  <span v-else class="chevron-placeholder"></span>
+
+                  <span class="mdi file-icon" :class="[
+                    f.is_dir
+                      ? (expandedFolders.has(f.path) ? 'mdi-folder-open' : 'mdi-folder')
+                      : getFileIcon(f.path),
+                    f.is_dir ? 'icon-folder' : 'icon-file'
+                  ]"></span>
+
+                  <span class="file-name" :title="f.path">{{ getFileName(f.path) }}</span>
+                </div>
               </td>
-              <td class="cell-sub">{{ f.is_dir ? '—' : fmtBytes(f.size) }}</td>
+
+              <td class="cell-sub cell-num">{{ f.is_dir ? '—' : fmtBytes(f.size) }}</td>
               <td class="cell-sub">{{ fmtEpoch(f.mod_time) }}</td>
-              <td class="text-right">
-                <button v-if="!f.is_dir" class="btn-icon btn-icon-muted" title="Download" aria-label="Download" @click="download(f)"><span class="mdi mdi-download"></span></button>
-                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Delete" aria-label="Delete" @click="pendingDelete = f; fileConfirmOpen = true"><span class="mdi mdi-trash-can-outline"></span></button>
+              <td class="text-right" @click.stop>
+                <div class="table-actions">
+                  <button v-if="!f.is_dir" class="btn-icon btn-icon-muted" title="Download" aria-label="Download"
+                    @click="download(f)">
+                    <span class="mdi mdi-download"></span>
+                  </button>
+                  <button v-if="ws.canEdit" class="btn-icon btn-icon-danger" title="Delete" aria-label="Delete"
+                    @click="pendingDelete = f; fileConfirmOpen = true">
+                    <span class="mdi mdi-trash-can-outline"></span>
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -581,6 +674,106 @@ code { background: var(--bg-tertiary); padding: 1px 6px; border-radius: 4px; fon
 .copyable .mdi { color: var(--text-muted); font-size: 13px; }
 .copyable:hover { color: var(--text-primary); }
 
-.danger-card { border-color: var(--danger-200, rgba(220, 38, 38, 0.2)); }
+.danger-card { border-color: var(--danger-100, rgba(220, 38, 38, 0.2)); }
+[data-theme="dark"] .danger-card {
+  border-color: var(--danger-900, rgba(239, 68, 68, 0.063));
+}
 .justify-between { justify-content: space-between; }
+
+.input-sm { font-size: 13px; padding: 8px 8px;}
+
+/* files table */
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 550px;
+}
+
+.file-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.file-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.icon-folder {
+  color: var(--primary-500, #3b82f6);
+}
+
+.icon-file {
+  color: var(--text-muted);
+}
+
+.file-name-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.file-name {
+  font-family: var(--font-mono, monospace);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-path-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+tr.is-dir {
+  cursor: pointer;
+}
+
+tr.is-dir:hover .file-name {
+  color: var(--primary-500, #3b82f6);
+}
+
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.3;
+  transition: opacity 0.15s ease;
+}
+
+tr:hover .table-actions {
+  opacity: 1;
+}
+
+.btn-icon-danger:hover {
+  color: var(--danger-600, #ef4444);
+  background: var(--danger-50, rgba(239, 68, 68, 0.1));
+}
+
+.chevron-icon {
+  font-size: 16px;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.chevron-placeholder {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.file-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 </style>
