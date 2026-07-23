@@ -795,7 +795,7 @@ function swarmClass(n: Server): string {
                     Access mode
                     <FieldInfo :items="ACCESS_MODES" title="Access modes explained" />
                   </span>
-                  <select v-model="form.access_mode" class="form-input">
+                  <select v-model="form.access_mode" class="form-select">
                     <option v-for="o in ACCESS_MODES" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
                   <p class="form-hint">{{ accessModeDesc }}</p>
@@ -825,7 +825,7 @@ function swarmClass(n: Server): string {
                     Connectivity
                     <FieldInfo :items="CONNECTIVITY_TYPES" title="Connectivity types explained" placement="top" />
                   </span>
-                  <select v-model="form.connectivity" class="form-input">
+                  <select v-model="form.connectivity" class="form-select">
                     <option v-for="o in CONNECTIVITY_TYPES" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
                   <p class="form-hint">{{ connectivityDesc }}</p>

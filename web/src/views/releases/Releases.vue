@@ -183,7 +183,7 @@ function short(s?: string) { return s ? s.replace(/^sha256:/, '').slice(0, 12) :
           <div class="modal-body">
             <div class="form-group">
               <label class="form-label">Target environment</label>
-              <select v-model="selectedEnv" class="form-input">
+              <select v-model="selectedEnv" class="form-select">
                 <option v-for="e in environments" :key="e.id" :value="e.id">{{ e.name }}</option>
               </select>
             </div>

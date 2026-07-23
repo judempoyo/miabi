@@ -51,7 +51,7 @@ function optionLabel(n: PlaceableNode): string {
 <template>
   <div v-if="hasChoice" class="form-group">
     <label class="form-label">Placement</label>
-    <select v-model="pinned" class="form-input" aria-label="Placement">
+    <select v-model="pinned" class="form-select" aria-label="Placement">
       <option value="">Any node — the scheduler decides</option>
       <option v-for="n in pinnable" :key="n.id" :value="n.swarm_node_id">Pin to {{ optionLabel(n) }}</option>
     </select>

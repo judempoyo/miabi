@@ -234,7 +234,7 @@ async function removeRoute() {
           </div>
 
           <div v-if="ws.canEdit" class="mw-attach">
-            <select v-model="selectedMw" class="input mw-select" :disabled="mwBusy || !availableMw.length">
+            <select v-model="selectedMw" class="input mw-select form-select" :disabled="mwBusy || !availableMw.length">
               <option value="">{{ availableMw.length ? 'Select a middleware…' : 'No more middlewares to attach' }}</option>
               <option v-for="m in availableMw" :key="m.id" :value="m.name">{{ m.name }} · {{ m.type }}</option>
             </select>

@@ -658,7 +658,7 @@ function eventSeverity(e: AdminEvent): string {
                   <span class="transfer-ws-name">{{ w.name }}</span>
                   <span class="transfer-ws-meta">{{ w.apps }} apps · {{ w.databases }} dbs · {{ w.stacks }} stacks</span>
                 </div>
-                <select v-if="w.members.length" v-model.number="transferChoice[w.id]" class="form-input transfer-select">
+                <select v-if="w.members.length" v-model.number="transferChoice[w.id]" class="transfer-select form-select">
                   <option :value="0">Delete this workspace's data</option>
                   <option v-for="m in w.members" :key="m.user_id" :value="m.user_id">Transfer to {{ m.name }} ({{ m.email }})</option>
                 </select>

@@ -80,7 +80,7 @@ function onAppChange(e: Event) {
       <div class="a-controls">
         <select
           :value="appFilter ?? ''"
-          class="a-select"
+          class="a-select form-select"
           @change="onAppChange"
         >
           <option value="">All applications</option>

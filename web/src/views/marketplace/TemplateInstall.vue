@@ -428,7 +428,7 @@ onUnmounted(stopJobStream)
 
           <div class="info-section">
             <div class="info-label">Version</div>
-            <select v-if="entry.versions.length > 1" class="form-input" :value="version || entry.version" @change="onVersionChange" aria-label="Version">
+            <select v-if="entry.versions.length > 1" class="form-select" :value="version || entry.version" @change="onVersionChange" aria-label="Version">
               <option v-for="v in entry.versions" :key="v" :value="v">v{{ v }}</option>
             </select>
             <div v-else class="info-value">v{{ version || entry.version }}</div>
@@ -512,7 +512,7 @@ onUnmounted(stopJobStream)
                 {{ inp.label || inp.key }}
                 <span v-if="inp.required && !inp.generate" style="color: var(--danger-500)">*</span>
               </label>
-              <select v-if="inp.type === 'select'" v-model="form.inputs[inp.key]" class="form-input" :aria-label="inp.label || inp.key">
+              <select v-if="inp.type === 'select'" v-model="form.inputs[inp.key]" class="form-select" :aria-label="inp.label || inp.key">
                 <option v-for="o in inp.options ?? []" :key="o" :value="o">{{ o }}</option>
               </select>
               <label v-else-if="inp.type === 'bool'" class="checkbox-row">
@@ -532,7 +532,7 @@ onUnmounted(stopJobStream)
 
             <div v-for="db in manifest?.databases ?? []" :key="db.name" class="form-group">
               <label class="form-label">{{ db.engine }} database ({{ db.name }})</label>
-              <select v-model="form.placement[db.name]" class="form-input" :disabled="db.engine === 'redis'" :aria-label="`${db.engine} database (${db.name})`">
+              <select v-model="form.placement[db.name]" class="form-select" :disabled="db.engine === 'redis'" :aria-label="`${db.engine} database (${db.name})`">
                 <option v-if="db.engine !== 'redis'" value="auto">Automatic (reuse or create)</option>
                 <option value="dedicated">New dedicated instance</option>
                 <option v-for="inst in instancesFor(db.engine)" :key="inst.id" :value="String(inst.id)">

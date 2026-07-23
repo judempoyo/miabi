@@ -80,7 +80,7 @@ onMounted(() => load())
     </div>
 
     <div class="filters">
-      <select v-model.number="wsFilter" class="select">
+      <select v-model.number="wsFilter" class="form-select" style="max-width: 220px">
         <option :value="0">All workspaces</option>
         <option v-for="w in workspaces" :key="w.id" :value="w.id">{{ w.display_name || w.name }}</option>
       </select>

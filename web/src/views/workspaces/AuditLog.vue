@@ -85,7 +85,7 @@ function when(ts: string): string {
       <label class="range-field">From <input v-model="from" type="date" class="form-input" /></label>
       <label class="range-field">To <input v-model="to" type="date" class="form-input" /></label>
       <button v-if="from || to" class="btn btn-ghost btn-sm" @click="clearRange">Clear</button>
-      <select v-model="order" class="form-select order-select" title="Sort order" aria-label="Sort order">
+      <select v-model="order" class="order-select form-select " title="Sort order" aria-label="Sort order">
         <option value="desc">Recent first</option>
         <option value="asc">Oldest first</option>
       </select>

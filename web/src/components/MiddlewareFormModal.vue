@@ -183,7 +183,7 @@ async function save() {
 
             <div class="form-group">
               <label class="form-label">Type</label>
-              <select v-model="form.type" class="form-input" :disabled="!!editing" aria-label="Type" @change="onTypeChange">
+              <select v-model="form.type" class="form-select" :disabled="!!editing" aria-label="Type" @change="onTypeChange">
                 <optgroup v-for="g in typesByCategory" :key="g.cat" :label="g.cat">
                   <option v-for="d in g.items" :key="d.type" :value="d.type">{{ d.display_name }}</option>
                 </optgroup>

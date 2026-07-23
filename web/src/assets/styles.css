@@ -704,6 +704,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 
 /* ─── Loading ─── */
 .spinner {
+  display: inline-block;
   width: 18px;
   height: 18px;
   border: 2px solid var(--border-primary);
