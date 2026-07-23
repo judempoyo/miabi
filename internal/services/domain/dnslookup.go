@@ -34,7 +34,7 @@ func authoritativeTXT(ctx context.Context, host string) ([]string, error) {
 		return nil, err
 	}
 	client := &dns.Client{Timeout: dnsQueryTimeout}
-	var lastErr error = errors.New("no authoritative nameserver answered")
+	lastErr := errors.New("no authoritative nameserver answered")
 	for _, ns := range nameservers {
 		addrs, aerr := net.DefaultResolver.LookupHost(ctx, strings.TrimSuffix(ns, "."))
 		if aerr != nil || len(addrs) == 0 {
@@ -66,7 +66,7 @@ func authoritativeTXT(ctx context.Context, host string) ([]string, error) {
 // stable and safe to resolve recursively (unlike the freshly-created TXT).
 func authoritativeNS(ctx context.Context, host string) ([]string, error) {
 	labels := strings.Split(host, ".")
-	var lastErr error = errors.New("no delegation found")
+	lastErr := errors.New("no delegation found")
 	for i := 0; i+1 < len(labels); i++ { // stop before the bare TLD
 		zone := strings.Join(labels[i:], ".")
 		nss, err := net.DefaultResolver.LookupNS(ctx, zone)
