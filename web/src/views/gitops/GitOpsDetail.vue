@@ -20,7 +20,7 @@ import ProjectNode from './ProjectNode.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import LogViewer from '@/components/LogViewer.vue'
 import { kindOf, nodeStatusMeta, gitSourceStatusMeta, edgeLabel, resourceRoute } from './topologyMeta'
-import type { GitSource, Topology, TopologyNode, PlanChange, NodeStatus, AppEvent } from '@/api/types'
+import type { GitSource, Topology, TopologyNode, PlanChange, NodeStatus, AppEvent, ApplyPlan } from '@/api/types'
 
 // Synthetic id for the project root node (the GitSource itself is not a
 // declarative resource, so it never collides with a "<Kind>/<name>" key).
@@ -58,6 +58,14 @@ let eventsES: EventSource | null = null
 let logsES: EventSource | null = null
 const EVENTS_PAGE = 30
 const LOG_CAP = 2000
+
+// Header status filter: clicking a chip toggles that status; when the set is
+// non-empty, non-matching nodes are dimmed on the graph.
+const statusFilter = ref<Set<NodeStatus>>(new Set())
+// Preview-&-sync modal: shows the full plan (from the diff endpoint) before applying.
+const previewOpen = ref(false)
+const previewLoading = ref(false)
+const previewPlan = ref<ApplyPlan | null>(null)
 
 const { setNodes, setEdges, fitView, updateNodeData } = useVueFlow()
 
@@ -129,6 +137,7 @@ async function load() {
   }
   try {
     await refreshGraph()
+    restoreSelection() // re-open the resource named in ?resource=, if any
   } catch (e) {
     // Topology itself failed (rare — the backend degrades to live state). Keep the
     // header + error visible rather than blanking the page.
@@ -240,9 +249,30 @@ function buildGraph() {
 
   setNodes(flowNodes)
   setEdges(flowEdges)
-  selectedKey.value = null
+  // Preserve the selection across refreshes (e.g. after a per-resource sync) when
+  // the node still exists; drop it only if the resource is gone.
+  const keys = new Set(tnodes.map((n) => n.key))
+  if (selectedKey.value && !keys.has(selectedKey.value)) selectedKey.value = null
+  applyDimming()
   nextTick(() => fitView({ padding: 0.2, maxZoom: 1.1 }))
 }
+
+// applyDimming pushes the current status filter onto each node so ResourceNode can
+// fade the ones that don't match. Cheap (data-only update, no relayout).
+function applyDimming() {
+  const active = statusFilter.value.size > 0
+  for (const n of topo.value?.nodes ?? []) {
+    updateNodeData(n.key, { dimmed: active && !statusFilter.value.has(n.status) })
+  }
+}
+
+function toggleStatusFilter(s: NodeStatus) {
+  const next = new Set(statusFilter.value)
+  if (next.has(s)) next.delete(s)
+  else next.add(s)
+  statusFilter.value = next
+}
+watch(statusFilter, applyDimming)
 
 watch([currentWorkspaceId, sourceId], load, { immediate: true })
 
@@ -426,7 +456,56 @@ function streamLogs(node: TopologyNode) {
 // resource resets to Overview.
 watch(selectedKey, () => {
   activeTab.value = 'overview'
+  // Keep the selection in the URL so it survives reload and is shareable.
+  router.replace({ query: { ...route.query, resource: selectedKey.value || undefined } })
 })
+
+// restoreSelection re-selects the resource named in ?resource= after a (re)load,
+// when nothing is selected and that resource exists.
+function restoreSelection() {
+  if (selectedKey.value) return
+  const q = route.query.resource
+  if (typeof q === 'string' && (topo.value?.nodes ?? []).some((n) => n.key === q)) {
+    selectedKey.value = q
+  }
+}
+
+// openPreview fetches the desired-vs-live plan and shows it before a full sync.
+async function openPreview() {
+  if (!currentWorkspaceId.value || !source.value) return
+  previewOpen.value = true
+  previewLoading.value = true
+  previewPlan.value = null
+  try {
+    const res = await gitopsApi.diff(currentWorkspaceId.value, source.value.id)
+    previewPlan.value = res.data.data ?? null
+  } catch (e) {
+    notify.apiError(e, 'Could not load the plan')
+  } finally {
+    previewLoading.value = false
+  }
+}
+// Non-noop changes the preview lists (create/update/delete).
+const previewChanges = computed<PlanChange[]>(() =>
+  (previewPlan.value?.changes ?? []).filter((c) => c.action !== 'noop'),
+)
+async function previewAndSync() {
+  previewOpen.value = false
+  await sync()
+}
+// planActionMeta styles a plan change by its action.
+function planActionMeta(action: string): { label: string; badge: string } {
+  switch (action) {
+    case 'create':
+      return { label: 'Create', badge: 'badge-success' }
+    case 'update':
+      return { label: 'Update', badge: 'badge-info' }
+    case 'delete':
+      return { label: 'Delete', badge: 'badge-danger' }
+    default:
+      return { label: action, badge: 'badge-neutral' }
+  }
+}
 watch([selectedKey, activeTab], () => {
   closeStreams()
   const node = selectedNode.value
@@ -537,6 +616,9 @@ const policyFlags = computed(() => {
         >
           <span class="live-dot"></span>{{ liveOn ? 'Live' : 'Paused' }}
         </button>
+        <button v-if="ws.canEdit" class="btn btn-secondary" title="Preview the plan before syncing" :disabled="syncing" @click="openPreview">
+          <span class="mdi mdi-file-search-outline"></span> Preview
+        </button>
         <button v-if="ws.canEdit" class="btn btn-secondary" :disabled="syncing" @click="sync">
           <span class="mdi" :class="syncing ? 'mdi-loading mdi-spin' : 'mdi-sync'"></span> Sync
         </button>
@@ -589,13 +671,24 @@ const policyFlags = computed(() => {
       <span><strong>Showing last-synced state.</strong> The latest revision could not be loaded: <span class="mono">{{ topo.error }}</span></span>
     </div>
 
-    <!-- Status legend -->
+    <!-- Status legend — click a chip to filter the graph by that status -->
     <div v-if="nodeCount" class="legend">
       <span class="legend-total">{{ nodeCount }} resource{{ nodeCount === 1 ? '' : 's' }}</span>
-      <span v-for="c in visibleCounts" :key="c.status" class="legend-item">
+      <button
+        v-for="c in visibleCounts"
+        :key="c.status"
+        type="button"
+        class="legend-item legend-chip"
+        :class="{ active: statusFilter.has(c.status), faded: statusFilter.size > 0 && !statusFilter.has(c.status) }"
+        :title="`Show only ${nodeStatusMeta[c.status].label.toLowerCase()}`"
+        @click="toggleStatusFilter(c.status)"
+      >
         <span class="dot" :style="{ background: nodeStatusMeta[c.status].color }"></span>
         {{ c.n }} {{ nodeStatusMeta[c.status].label.toLowerCase() }}
-      </span>
+      </button>
+      <button v-if="statusFilter.size" type="button" class="legend-clear" @click="statusFilter = new Set()">
+        <span class="mdi mdi-close"></span> clear filter
+      </button>
     </div>
 
     <!-- Graph + side panel -->
@@ -776,6 +869,37 @@ const policyFlags = computed(() => {
       @confirm="deleteResource"
       @cancel="confirmDelete = false"
     />
+
+    <!-- Preview & sync -->
+    <div v-if="previewOpen" class="modal-overlay" @click.self="previewOpen = false">
+      <div class="preview-modal">
+        <div class="preview-head">
+          <h3>Sync preview</h3>
+          <button class="btn-icon btn-icon-muted" aria-label="Close" @click="previewOpen = false"><span class="mdi mdi-close"></span></button>
+        </div>
+        <div class="preview-body">
+          <div v-if="previewLoading" class="drawer-empty"><span class="spinner"></span></div>
+          <div v-else-if="previewChanges.length === 0" class="drawer-empty">
+            <span class="mdi mdi-check-circle-outline"></span>
+            <p>In sync — nothing to apply.</p>
+          </div>
+          <ul v-else class="preview-list">
+            <li v-for="(c, i) in previewChanges" :key="i" class="preview-change">
+              <span class="badge" :class="planActionMeta(c.action).badge">{{ planActionMeta(c.action).label }}</span>
+              <span class="preview-kind">{{ c.kind }}</span>
+              <span class="preview-name mono">{{ c.name }}</span>
+            </li>
+          </ul>
+        </div>
+        <div class="preview-foot">
+          <button class="btn btn-secondary" @click="previewOpen = false">Cancel</button>
+          <button class="btn btn-primary" :disabled="syncing || previewLoading" @click="previewAndSync">
+            <span class="mdi" :class="syncing ? 'mdi-loading mdi-spin' : 'mdi-sync'"></span>
+            Sync<span v-if="previewChanges.length"> ({{ previewChanges.length }})</span>
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -837,10 +961,44 @@ const policyFlags = computed(() => {
 .banner-warning { background: color-mix(in srgb, var(--warning-600) 12%, transparent); color: var(--warning-700, var(--warning-600)); }
 .banner-warning .mono { word-break: break-all; }
 
-.legend { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted); }
+.legend { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
 .legend-total { font-weight: 600; color: var(--text-primary); }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .legend-item .dot { width: 9px; height: 9px; border-radius: 50%; }
+/* Clickable filter chips. */
+.legend-chip {
+  appearance: none; border: 1px solid transparent; background: none; cursor: pointer;
+  color: inherit; font-size: 12px; padding: 3px 8px; border-radius: 999px; transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.legend-chip:hover { background: var(--bg-secondary); }
+.legend-chip.active { border-color: var(--border-primary); background: var(--bg-secondary); color: var(--text-primary); font-weight: 600; }
+.legend-chip.faded { opacity: 0.5; }
+.legend-clear {
+  appearance: none; border: none; background: none; cursor: pointer; color: var(--text-muted);
+  font-size: 12px; display: inline-flex; align-items: center; gap: 3px;
+}
+.legend-clear:hover { color: var(--text-primary); }
+
+/* Preview & sync modal. */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); padding: 24px;
+}
+.preview-modal {
+  width: 100%; max-width: 560px; max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.preview-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border-primary); }
+.preview-head h3 { margin: 0; font-size: 15px; }
+.preview-body { padding: 8px 16px; overflow-y: auto; flex: 1; }
+.preview-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.preview-change { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border-primary); }
+.preview-change:last-child { border-bottom: none; }
+.preview-change .badge { flex-shrink: 0; }
+.preview-kind { font-size: 12px; color: var(--text-muted); }
+.preview-name { font-size: 13px; color: var(--text-primary); word-break: break-all; }
+.preview-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border-primary); }
 
 .graph-wrap { position: relative; height: calc(100vh - 230px); min-height: 460px; padding: 0; overflow: hidden; }
 .graph-placeholder { display: grid; place-items: center; height: 100%; }
