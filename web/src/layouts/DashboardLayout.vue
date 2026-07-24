@@ -19,6 +19,8 @@ const theme = useThemeStore()
 const ws = useWorkspaceStore()
 const notify = useNotificationStore()
 const license = useLicenseStore()
+const userMenuRef = ref<HTMLElement | null>(null)
+const wsSwitcherRef = ref<HTMLElement | null>(null)
 
 const sidebarCollapsed = ref(localStorage.getItem('mb_sidebar_collapsed') === 'true')
 const mobileOpen = ref(false)
@@ -302,9 +304,15 @@ async function copyLoginCommand() {
 }
 
 function closeMenus(e: MouseEvent) {
-  const target = e.target as Element
-  if (userMenuOpen.value && !target.closest?.('.user-menu')) userMenuOpen.value = false
-  if (wsSwitcherOpen.value && !target.closest?.('.ws-switcher')) wsSwitcherOpen.value = false
+  const target = e.target as Node
+
+  if (userMenuOpen.value && userMenuRef.value && !userMenuRef.value.contains(target)) {
+    userMenuOpen.value = false
+  }
+
+  if (wsSwitcherOpen.value && wsSwitcherRef.value && !wsSwitcherRef.value.contains(target)) {
+    wsSwitcherOpen.value = false
+  }
 }
 
 // License banner: admins see a warning when the license is in grace, expired,
@@ -358,9 +366,9 @@ async function dismissUpdate() {
 onMounted(async () => {
   document.addEventListener('click', closeMenus)
   if (!auth.user) await auth.fetchUser()
-  if (auth.isAdmin) license.load().catch(() => {})
+  if (auth.isAdmin) license.load().catch(() => { })
   loadUpdate()
-  infoApi.get().then((res) => { docsEnabled.value = res.data.data.openapi_docs }).catch(() => {})
+  infoApi.get().then((res) => { docsEnabled.value = res.data.data.openapi_docs }).catch(() => { })
   try {
     await ws.fetchWorkspaces()
   } catch {
@@ -379,13 +387,10 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
     <aside class="sidebar">
       <div class="sidebar-header">
         <img src="/brand/miabi-mark-white.svg" alt="Miabi" class="sidebar-logo" @click="navigate('/')" />
-        <span class="sidebar-brand-text" @click="navigate('/')">Miabi<span class="sidebar-brand-accent">.io</span></span>
-        <button
-          class="sidebar-collapse-btn"
-          :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-          :aria-label="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
-          @click="toggleSidebar"
-        >
+        <span class="sidebar-brand-text" @click="navigate('/')">Miabi<span
+            class="sidebar-brand-accent">.io</span></span>
+        <button class="sidebar-collapse-btn" :title="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'"
+          :aria-label="sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'" @click="toggleSidebar">
           <!-- Panel toggle: a sidebar glyph whose inner chevron points the way it will move. -->
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
@@ -397,23 +402,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
       </div>
 
       <!-- Workspace switcher -->
-      <div class="ws-switcher">
+      <div ref="wsSwitcherRef" class="ws-switcher">
         <div class="ws-switcher-toggle" @click="wsSwitcherOpen = !wsSwitcherOpen">
           <div class="ws-switcher-current">
-            <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name || ws.currentWorkspace?.name)?.charAt(0)?.toUpperCase() || 'D' }}</div>
+            <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name ||
+              ws.currentWorkspace?.name)?.charAt(0)?.toUpperCase() || 'D' }}</div>
             <span v-if="!sidebarCollapsed" class="ws-switcher-name">{{ ws.contextLabel }}</span>
           </div>
           <span v-if="!sidebarCollapsed" class="mdi mdi-unfold-more-horizontal ws-switcher-chevron"></span>
         </div>
         <Transition name="dropdown">
           <div v-if="wsSwitcherOpen" class="ws-switcher-dropdown">
-            <div
-              v-for="w in ws.workspaces"
-              :key="w.id"
-              class="ws-switcher-option"
-              :class="{ active: ws.currentWorkspaceId === w.id }"
-              @click="switchWorkspace(w.id)"
-            >
+            <div v-for="w in ws.workspaces" :key="w.id" class="ws-switcher-option"
+              :class="{ active: ws.currentWorkspaceId === w.id }" @click="switchWorkspace(w.id)">
               <div class="ws-avatar-sm">{{ (w.display_name || w.name).charAt(0).toUpperCase() }}</div>
               <span class="ws-switcher-option-name">
                 {{ w.display_name || w.name }}
@@ -435,43 +436,22 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 
       <nav class="sidebar-nav">
         <div v-for="section in visibleSections" :key="section.id" class="nav-section">
-          <button
-            v-if="!sidebarCollapsed"
-            class="nav-section-title"
-            :aria-expanded="sectionOpen[section.id]"
-            @click="toggleSection(section.id)"
-          >
+          <button v-if="!sidebarCollapsed" class="nav-section-title" :aria-expanded="sectionOpen[section.id]"
+            @click="toggleSection(section.id)">
             <span>{{ section.title }}</span>
-            <span
-              class="mdi mdi-chevron-down nav-section-chevron"
-              :class="{ collapsed: !sectionOpen[section.id] }"
-            ></span>
+            <span class="mdi mdi-chevron-down nav-section-chevron"
+              :class="{ collapsed: !sectionOpen[section.id] }"></span>
           </button>
           <div v-show="sidebarCollapsed || sectionOpen[section.id]" class="nav-section-items">
             <template v-for="item in sectionItems(section)">
-              <a
-                v-if="item.external"
-                :key="`ext-${item.name}`"
-                class="nav-item"
-                :href="docsUrl"
-                target="_blank"
-                rel="noopener noreferrer"
-                :title="sidebarCollapsed ? item.name : ''"
-                @click="mobileOpen = false"
-              >
+              <a v-if="item.external" :key="`ext-${item.name}`" class="nav-item" :href="docsUrl" target="_blank"
+                rel="noopener noreferrer" :title="sidebarCollapsed ? item.name : ''" @click="mobileOpen = false">
                 <span class="mdi nav-icon" :class="item.icon"></span>
                 <span v-if="!sidebarCollapsed" class="nav-label">{{ item.name }}</span>
                 <span v-if="!sidebarCollapsed" class="mdi mdi-open-in-new nav-external-icon"></span>
               </a>
-              <router-link
-                v-else
-                :key="item.name"
-                class="nav-item"
-                :class="{ active: isItemActive(item) }"
-                :title="sidebarCollapsed ? item.name : ''"
-                :to="itemTo(item)"
-                @click="mobileOpen = false"
-              >
+              <router-link v-else :key="item.name" class="nav-item" :class="{ active: isItemActive(item) }"
+                :title="sidebarCollapsed ? item.name : ''" :to="itemTo(item)" @click="mobileOpen = false">
                 <span class="mdi nav-icon" :class="item.icon"></span>
                 <span v-if="!sidebarCollapsed" class="nav-label">{{ item.name }}</span>
               </router-link>
@@ -490,7 +470,9 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
         </div>
         <div class="topbar-right">
           <NotificationBell />
-          <div class="user-menu" @click="userMenuOpen = !userMenuOpen">
+          <div class="user-menu" ref="userMenuRef">
+ 
+          <div class="user-menu-trigger" @click="userMenuOpen = !userMenuOpen">
             <div class="user-avatar">{{ user?.name?.charAt(0)?.toUpperCase() || '?' }}</div>
             <div class="user-menu-info">
               <div class="user-name">{{ user?.name || 'User' }}</div>
@@ -513,28 +495,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                     <span class="mdi mdi-theme-light-dark"></span> Theme
                   </div>
                   <div class="theme-switcher">
-                    <button
-                      v-for="m in themeModes"
-                      :key="m"
-                      :class="['theme-btn', { active: theme.mode === m }]"
+                    <button v-for="m in themeModes" :key="m" :class="['theme-btn', { active: theme.mode === m }]"
                       :title="m.charAt(0).toUpperCase() + m.slice(1)"
-                      :aria-label="m.charAt(0).toUpperCase() + m.slice(1)"
-                      @click.stop="theme.setMode(m)"
-                    >
-                      <span
-                        class="mdi"
-                        :class="m === 'light' ? 'mdi-weather-sunny' : m === 'dark' ? 'mdi-weather-night' : 'mdi-monitor'"
-                      ></span>
+                      :aria-label="m.charAt(0).toUpperCase() + m.slice(1)" @click.stop="theme.setMode(m)">
+                      <span class="mdi"
+                        :class="m === 'light' ? 'mdi-weather-sunny' : m === 'dark' ? 'mdi-weather-night' : 'mdi-monitor'"></span>
                     </button>
                   </div>
                 </div>
                 <div class="user-dropdown-divider"></div>
-                <RouterLink
-                  v-if="auth.isAdmin"
-                  to="/admin/metrics"
-                  class="user-dropdown-item"
-                  @click.stop="userMenuOpen = false"
-                >
+                <RouterLink v-if="auth.isAdmin" to="/admin/metrics" class="user-dropdown-item"
+                  @click.stop="userMenuOpen = false">
                   <span class="mdi mdi-shield-crown-outline"></span> Platform Admin
                 </RouterLink>
                 <RouterLink to="/account/profile" class="user-dropdown-item" @click.stop="userMenuOpen = false">
@@ -556,17 +527,14 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                 </a>
               </div>
             </Transition>
+            </div>
           </div>
         </div>
       </header>
 
       <main class="main-content">
-        <router-link
-          v-if="licenseBanner"
-          to="/admin/license"
-          class="license-banner"
-          :class="`license-banner-${licenseBanner.level}`"
-        >
+        <router-link v-if="licenseBanner" to="/admin/license" class="license-banner"
+          :class="`license-banner-${licenseBanner.level}`">
           <span class="mdi mdi-alert-outline"></span>
           <span>{{ licenseBanner.text }}</span>
           <span class="license-banner-cta">Manage license →</span>
@@ -580,25 +548,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
             <strong>Miabi {{ update?.latest_version }}</strong> is available — you're running
             {{ update?.current_version }}.
           </span>
-          <a
-            :href="update?.release_url"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="update-banner-cta"
-          >
+          <a :href="update?.release_url" target="_blank" rel="noopener noreferrer" class="update-banner-cta">
             Release notes →
           </a>
-          <button
-            class="update-banner-dismiss"
-            title="Dismiss until the next release"
-            aria-label="Dismiss until the next release"
-            @click="dismissUpdate"
-          >
+          <button class="update-banner-dismiss" title="Dismiss until the next release"
+            aria-label="Dismiss until the next release" @click="dismissUpdate">
             <span class="mdi mdi-close"></span>
           </button>
         </div>
 
-        <div v-if="ws.loaded && ws.workspaces.length === 0 && route.path !== '/workspaces' && !route.meta.noWorkspace" class="empty-state">
+        <div v-if="ws.loaded && ws.workspaces.length === 0 && route.path !== '/workspaces' && !route.meta.noWorkspace"
+          class="empty-state">
           <!-- An invitee has somewhere to go that isn't "create a workspace". -->
           <template v-if="invitations.length">
             <span class="mdi mdi-email-outline" style="font-size: 48px; color: var(--text-muted)"></span>
@@ -613,11 +573,8 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                     <template v-if="inv.invited_by_name"> by {{ inv.invited_by_name }}</template>
                   </span>
                 </div>
-                <button
-                  class="btn btn-primary btn-sm"
-                  :disabled="acceptingId === inv.id"
-                  @click="acceptInvitation(inv)"
-                >
+                <button class="btn btn-primary btn-sm" :disabled="acceptingId === inv.id"
+                  @click="acceptInvitation(inv)">
                   {{ acceptingId === inv.id ? 'Joining…' : 'Accept' }}
                 </button>
               </li>
@@ -669,20 +626,16 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
         <div class="ws-switcher">
           <div class="ws-switcher-toggle" @click="wsSwitcherOpen = !wsSwitcherOpen">
             <div class="ws-switcher-current">
-              <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name || ws.currentWorkspace?.name)?.charAt(0)?.toUpperCase() || 'D' }}</div>
+              <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name ||
+                ws.currentWorkspace?.name)?.charAt(0)?.toUpperCase() || 'D' }}</div>
               <span class="ws-switcher-name">{{ ws.contextLabel }}</span>
             </div>
             <span class="mdi mdi-unfold-more-horizontal ws-switcher-chevron"></span>
           </div>
           <Transition name="dropdown">
             <div v-if="wsSwitcherOpen" class="ws-switcher-dropdown">
-              <div
-                v-for="w in ws.workspaces"
-                :key="w.id"
-                class="ws-switcher-option"
-                :class="{ active: ws.currentWorkspaceId === w.id }"
-                @click="switchWorkspace(w.id)"
-              >
+              <div v-for="w in ws.workspaces" :key="w.id" class="ws-switcher-option"
+                :class="{ active: ws.currentWorkspaceId === w.id }" @click="switchWorkspace(w.id)">
                 <div class="ws-avatar-sm">{{ (w.display_name || w.name).charAt(0).toUpperCase() }}</div>
                 <span class="ws-switcher-option-name">
                   {{ w.display_name || w.name }}
@@ -704,31 +657,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
           <div v-for="section in visibleSections" :key="section.id" class="nav-section">
             <button class="nav-section-title" @click="toggleSection(section.id)">
               <span>{{ section.title }}</span>
-              <span class="mdi mdi-chevron-down nav-section-chevron" :class="{ collapsed: !sectionOpen[section.id] }"></span>
+              <span class="mdi mdi-chevron-down nav-section-chevron"
+                :class="{ collapsed: !sectionOpen[section.id] }"></span>
             </button>
             <div v-show="sectionOpen[section.id]" class="nav-section-items">
               <template v-for="item in sectionItems(section)">
-                <a
-                  v-if="item.external"
-                  :key="`ext-${item.name}`"
-                  class="nav-item"
-                  :href="docsUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  @click="mobileOpen = false"
-                >
+                <a v-if="item.external" :key="`ext-${item.name}`" class="nav-item" :href="docsUrl" target="_blank"
+                  rel="noopener noreferrer" @click="mobileOpen = false">
                   <span class="mdi nav-icon" :class="item.icon"></span>
                   <span class="nav-label">{{ item.name }}</span>
                   <span class="mdi mdi-open-in-new nav-external-icon"></span>
                 </a>
-                <router-link
-                  v-else
-                  :key="item.name"
-                  class="nav-item"
-                  :class="{ active: isItemActive(item) }"
-                  :to="itemTo(item)"
-                  @click="mobileOpen = false"
-                >
+                <router-link v-else :key="item.name" class="nav-item" :class="{ active: isItemActive(item) }"
+                  :to="itemTo(item)" @click="mobileOpen = false">
                   <span class="mdi nav-icon" :class="item.icon"></span>
                   <span class="nav-label">{{ item.name }}</span>
                 </router-link>
@@ -759,6 +700,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   border-radius: 8px;
   text-align: left;
 }
+
 .empty-invite {
   display: flex;
   align-items: center;
@@ -766,24 +708,29 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   gap: 12px;
   padding: 14px 16px;
 }
-.empty-invite + .empty-invite {
+
+.empty-invite+.empty-invite {
   border-top: 1px solid var(--border-secondary);
 }
+
 .empty-invite-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
+
 .empty-invite-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
+
 .empty-invite-sub {
   font-size: 13px;
   color: var(--text-muted);
 }
+
 .empty-invite-sub strong {
   color: var(--text-secondary);
   text-transform: capitalize;
@@ -802,6 +749,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   z-index: 40;
   transition: width var(--transition-slow);
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) {
   width: 64px;
 }
@@ -814,12 +762,14 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   flex-shrink: 0;
   position: relative;
 }
+
 .sidebar-logo {
   width: 28px;
   height: 28px;
   flex-shrink: 0;
   cursor: pointer;
 }
+
 .sidebar-brand-text {
   font-size: 19px;
   font-weight: 700;
@@ -830,14 +780,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   cursor: pointer;
   transition: opacity var(--transition-slow);
 }
+
 /* Two-tone wordmark: the trailing .io carries the brand accent. */
 .sidebar-brand-accent {
   color: var(--primary-400);
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .sidebar-brand-text {
   opacity: 0;
   width: 0;
 }
+
 .sidebar-collapse-btn {
   background: none;
   border: none;
@@ -854,10 +807,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   top: 18px;
   right: 10px;
 }
+
 .sidebar-collapse-btn:hover {
   color: #fff;
   background: var(--sidebar-hover);
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .sidebar-collapse-btn {
   right: -14px;
   top: 20px;
@@ -871,6 +826,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 0 8px 8px;
   position: relative;
 }
+
 .ws-switcher-toggle {
   display: flex;
   align-items: center;
@@ -882,16 +838,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   border: 1px solid var(--sidebar-border);
   transition: background var(--transition), color var(--transition);
 }
+
 .ws-switcher-toggle:hover {
   background: var(--sidebar-hover);
   color: var(--sidebar-text-active);
 }
+
 .ws-switcher-current {
   display: flex;
   align-items: center;
   gap: 8px;
   overflow: hidden;
 }
+
 .ws-avatar {
   width: 24px;
   height: 24px;
@@ -905,6 +864,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-weight: 600;
   flex-shrink: 0;
 }
+
 .ws-avatar-sm {
   width: 22px;
   height: 22px;
@@ -918,6 +878,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-weight: 600;
   flex-shrink: 0;
 }
+
 .ws-switcher-name {
   font-size: 13px;
   font-weight: 600;
@@ -925,16 +886,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .ws-switcher-chevron {
   font-size: 16px;
   opacity: 0.7;
   flex-shrink: 0;
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .ws-switcher-toggle {
   justify-content: center;
   padding: 8px;
   border-color: transparent;
 }
+
 .ws-switcher-dropdown {
   position: absolute;
   top: calc(100% + 2px);
@@ -948,6 +912,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   z-index: 200;
   min-width: 210px;
 }
+
 .ws-switcher-option {
   display: flex;
   align-items: center;
@@ -960,14 +925,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   cursor: pointer;
   transition: all var(--transition);
 }
+
 .ws-switcher-option:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
 .ws-switcher-option.active {
   background: var(--primary-50);
   color: var(--primary-700);
 }
+
 .ws-switcher-option-name {
   display: flex;
   flex-direction: column;
@@ -976,6 +944,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .ws-switcher-option-handle {
   font-size: 11px;
   font-family: monospace;
@@ -983,6 +952,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .ws-role-badge {
   margin-left: auto;
   font-size: 10px;
@@ -992,17 +962,20 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   letter-spacing: 0.05em;
   flex-shrink: 0;
 }
+
 .ws-switcher-empty {
   padding: 10px;
   font-size: 13px;
   color: var(--text-muted);
   text-align: center;
 }
+
 .ws-switcher-divider {
   height: 1px;
   background: var(--border-primary);
   margin: 4px 6px;
 }
+
 .ws-switcher-action {
   display: flex;
   align-items: center;
@@ -1015,10 +988,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   cursor: pointer;
   transition: all var(--transition);
 }
+
 .ws-switcher-action:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
 .ws-switcher-action .mdi {
   font-size: 16px;
 }
@@ -1030,9 +1005,11 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   overflow-x: hidden;
   padding: 8px;
 }
-.nav-section + .nav-section {
+
+.nav-section+.nav-section {
   margin-top: 14px;
 }
+
 .nav-section-title {
   display: flex;
   align-items: center;
@@ -1051,19 +1028,24 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   opacity: 0.6;
   transition: opacity var(--transition);
 }
+
 .nav-section-title:hover {
   opacity: 1;
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .nav-section-title {
   display: none;
 }
+
 .nav-section-chevron {
   font-size: 14px;
   transition: transform var(--transition);
 }
+
 .nav-section-chevron.collapsed {
   transform: rotate(-90deg);
 }
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -1079,15 +1061,18 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   overflow: hidden;
   position: relative;
 }
+
 .nav-item:hover {
   background: var(--sidebar-hover);
   color: var(--sidebar-text-active);
 }
+
 .nav-item.active {
   background: var(--sidebar-hover);
   color: var(--sidebar-text-active);
   font-weight: 500;
 }
+
 .nav-item.active::before {
   content: '';
   position: absolute;
@@ -1099,23 +1084,28 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   background: var(--primary-500);
   border-radius: 0 3px 3px 0;
 }
+
 .nav-icon {
   flex-shrink: 0;
   font-size: 18px;
   opacity: 0.8;
 }
+
 .nav-external-icon {
   margin-left: auto;
   font-size: 13px;
   opacity: 0.5;
 }
+
 .nav-item.active .nav-icon {
   opacity: 1;
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .nav-item {
   justify-content: center;
   padding: 9px;
 }
+
 .sidebar-collapsed .sidebar:not(.sidebar-mobile) .nav-label {
   display: none;
 }
@@ -1129,6 +1119,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   min-height: 100vh;
   transition: margin-left var(--transition-slow);
 }
+
 .sidebar-collapsed .main-wrapper {
   margin-left: 64px;
 }
@@ -1145,11 +1136,14 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 0 24px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border-primary);
+  transition: background var(--transition-slow), border-color var(--transition-slow);
 }
+
 .topbar-left {
   display: flex;
   align-items: center;
 }
+
 .mobile-menu-btn {
   display: none;
   align-items: center;
@@ -1161,11 +1155,14 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-size: 22px;
   padding: 6px;
   border-radius: var(--radius-sm);
+  transition: color var(--transition), background var(--transition);
 }
+
 .mobile-menu-btn:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
 }
+
 .topbar-right {
   display: flex;
   align-items: center;
@@ -1174,7 +1171,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 }
 
 /* ─── User menu ─── */
-.user-menu {
+/* .user-menu {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1186,8 +1183,28 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   user-select: none;
   color: var(--text-secondary);
 }
+
 .user-menu:hover {
   background: var(--bg-hover);
+} */
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 1px solid transparent;
+  padding: 5px 10px 5px 5px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.user-menu-trigger:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-primary);
 }
 .user-avatar {
   width: 32px;
@@ -1202,14 +1219,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-weight: 600;
   flex-shrink: 0;
 }
+
 .user-avatar-lg {
   width: 38px;
   height: 38px;
   font-size: 15px;
 }
+
 .user-menu-info {
   overflow: hidden;
 }
+
 .user-name {
   font-size: 13px;
   font-weight: 600;
@@ -1219,6 +1239,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-overflow: ellipsis;
   max-width: 140px;
 }
+
 .user-email {
   font-size: 11px;
   color: var(--text-muted);
@@ -1227,6 +1248,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-overflow: ellipsis;
   max-width: 140px;
 }
+
 .user-dropdown {
   position: absolute;
   top: calc(100% + 6px);
@@ -1239,15 +1261,18 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   z-index: 50;
   overflow: hidden;
 }
+
 .user-dropdown-header {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
 }
+
 .user-dropdown-info {
   overflow: hidden;
 }
+
 .user-dropdown-name {
   font-size: 14px;
   font-weight: 600;
@@ -1256,6 +1281,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .user-dropdown-email {
   font-size: 12px;
   color: var(--text-muted);
@@ -1263,10 +1289,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .user-dropdown-divider {
   height: 1px;
   background: var(--border-primary);
 }
+
 .user-dropdown-item {
   display: flex;
   align-items: center;
@@ -1278,26 +1306,32 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   transition: background var(--transition), color var(--transition);
   text-decoration: none;
 }
+
 .user-dropdown-item .mdi {
   font-size: 17px;
 }
+
 .user-dropdown-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+
 .user-dropdown-logout {
   color: var(--danger-600);
 }
+
 .user-dropdown-logout:hover {
   background: var(--danger-50);
   color: var(--danger-700);
 }
+
 .user-dropdown-theme {
   padding: 10px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
+
 .user-dropdown-theme-label {
   display: flex;
   align-items: center;
@@ -1306,6 +1340,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   color: var(--text-muted);
   font-weight: 500;
 }
+
 .theme-switcher {
   display: flex;
   background: var(--bg-tertiary);
@@ -1313,6 +1348,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 2px;
   gap: 2px;
 }
+
 .theme-btn {
   padding: 5px 9px;
   border: none;
@@ -1325,9 +1361,11 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   align-items: center;
   transition: all var(--transition);
 }
+
 .theme-btn:hover {
   color: var(--text-primary);
 }
+
 .theme-btn.active {
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -1353,21 +1391,25 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-weight: 500;
   text-decoration: none;
 }
+
 .license-banner .mdi {
   font-size: 18px;
   flex-shrink: 0;
 }
+
 .license-banner-cta {
   margin-left: auto;
   white-space: nowrap;
   font-weight: 600;
   opacity: 0.85;
 }
+
 .license-banner-warning {
   background: var(--warning-bg, rgba(245, 158, 11, 0.12));
   border-color: var(--warning, #d97706);
   color: var(--warning, #b45309);
 }
+
 .license-banner-danger {
   background: var(--danger-bg, rgba(239, 68, 68, 0.12));
   border-color: var(--danger, #dc2626);
@@ -1389,15 +1431,22 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-size: 13px;
   line-height: 1.45;
 }
+
+[data-theme="dark"] .update-banner {
+  border: 1px solid var(--success-800, #16a34a4c);
+}
+
 .update-banner-icon {
   font-size: 20px;
   flex-shrink: 0;
   color: var(--success-500, #16a34a);
 }
+
 .update-banner-text strong {
   color: var(--text-primary);
   font-weight: 600;
 }
+
 .update-banner-cta {
   margin-left: auto;
   white-space: nowrap;
@@ -1405,9 +1454,11 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-decoration: none;
   color: var(--success-500, #16a34a);
 }
+
 .update-banner-cta:hover {
   text-decoration: underline;
 }
+
 .update-banner-dismiss {
   flex-shrink: 0;
   display: inline-flex;
@@ -1419,6 +1470,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   color: var(--text-muted);
   cursor: pointer;
 }
+
 .update-banner-dismiss:hover {
   color: var(--text-primary);
 }
@@ -1436,15 +1488,27 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   font-size: 13px;
   line-height: 1.45;
 }
+
+[data-theme="dark"] .ce-banner {
+  border: 1px solid var(--accent, #6365f152);
+}
+
 .ce-banner-icon {
   font-size: 20px;
   flex-shrink: 0;
   color: var(--accent, #6366f1);
 }
+
+.ce-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .ce-banner-text strong {
   color: var(--text-primary);
   font-weight: 600;
 }
+
 .ce-banner-cta {
   margin-left: auto;
   white-space: nowrap;
@@ -1452,20 +1516,23 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   text-decoration: none;
   color: var(--accent, #6366f1);
 }
+
 .ce-banner-cta:hover {
   text-decoration: underline;
 }
+
 .ce-banner-dismiss {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  padding: 2px;
+  padding: 4px;
   border: none;
   border-radius: 4px;
   background: none;
   color: var(--text-muted);
   cursor: pointer;
 }
+
 .ce-banner-dismiss:hover {
   color: var(--text-primary);
   background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
@@ -1482,14 +1549,17 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   color: var(--text-muted);
   background: var(--bg-primary);
 }
+
 .footer-left {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
 .footer-sep {
   opacity: 0.5;
 }
+
 .footer-link {
   display: flex;
   align-items: center;
@@ -1497,6 +1567,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   color: var(--text-muted);
   transition: color var(--transition);
 }
+
 .footer-link:hover {
   color: var(--text-primary);
 }
@@ -1509,6 +1580,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   z-index: 35;
   backdrop-filter: blur(4px);
 }
+
 .sidebar-mobile {
   z-index: 45;
   width: 240px;
@@ -1519,23 +1591,28 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 .dropdown-leave-active {
   transition: opacity 150ms ease, transform 150ms ease;
 }
+
 .dropdown-enter-from,
 .dropdown-leave-to {
   opacity: 0;
   transform: translateY(-4px);
 }
+
 .overlay-fade-enter-active,
 .overlay-fade-leave-active {
   transition: opacity 180ms ease;
 }
+
 .overlay-fade-enter-from,
 .overlay-fade-leave-to {
   opacity: 0;
 }
+
 .sidebar-slide-enter-active,
 .sidebar-slide-leave-active {
   transition: transform 200ms ease;
 }
+
 .sidebar-slide-enter-from,
 .sidebar-slide-leave-to {
   transform: translateX(-100%);
@@ -1546,29 +1623,87 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   .sidebar:not(.sidebar-mobile) {
     display: none;
   }
+
   .main-wrapper {
     margin-left: 0 !important;
   }
+
   .mobile-menu-btn {
     display: flex;
   }
 }
-@media (max-width: 640px) {
+
+@media (max-width: 639px) {
   .main-content {
     padding: 20px 16px;
   }
+
   .topbar {
     padding: 0 16px;
   }
+
   .main-footer {
     padding: 14px 16px;
     flex-direction: column;
     gap: 8px;
     text-align: center;
   }
+
   .user-name,
   .user-email {
     display: none;
+  }
+}
+
+@media (max-width: 639px) {
+
+  .ce-banner,
+  .update-banner {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 12px;
+    padding: 10px;
+    margin-left: 2px;
+    margin-right: 2px;
+  }
+
+  .ce-banner-icon,
+  .update-banner-icon {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: start;
+    margin-top: 2px;
+  }
+
+  .ce-banner-text,
+  .update-banner-text {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .ce-banner-cta,
+  .update-banner-cta {
+    grid-column: 2;
+    grid-row: 2;
+    margin-left: 0;
+    align-self: start;
+  }
+
+  .ce-banner,
+  .update-banner {
+    position: relative;
+  }
+
+  .ce-banner-dismiss,
+  .update-banner-dismiss {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+  }
+
+  .ce-banner-text,
+  .update-banner-text {
+    padding-right: 24px;
   }
 }
 </style>

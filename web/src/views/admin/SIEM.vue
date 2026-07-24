@@ -214,7 +214,7 @@ async function test(t: SIEMConfig) {
               </div>
               <div class="form-group">
                 <label class="form-label">Sink</label>
-                <select v-model="form.sink" class="form-input">
+                <select v-model="form.sink" class="form-select">
                   <option value="webhook">Webhook (HTTPS NDJSON)</option>
                   <option value="syslog">Syslog (RFC 5424)</option>
                 </select>
@@ -231,7 +231,7 @@ async function test(t: SIEMConfig) {
               </div>
               <div class="form-group">
                 <label class="form-label">Format</label>
-                <select v-model="form.format" class="form-input">
+                <select v-model="form.format" class="form-select">
                   <option value="json">JSON</option>
                   <option value="cef">CEF (syslog)</option>
                 </select>

@@ -327,7 +327,7 @@ function shortSha(sha?: string) { return sha ? sha.slice(0, 7) : '—' }
               </div>
               <div class="form-group">
                 <label class="form-label">Git repository</label>
-                <select v-model="form.git_repository_id" class="form-input" required aria-label="Git repository">
+                <select v-model="form.git_repository_id" class="form-select" required aria-label="Git repository">
                   <option :value="null" disabled>Select a repository…</option>
                   <option v-for="c in credentials" :key="c.id" :value="c.id">{{ c.name }} — {{ c.url }}</option>
                 </select>

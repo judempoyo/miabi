@@ -1088,7 +1088,7 @@ const gwBadge = computed(() => {
                      Swarm keeps scheduling onto a host that is about to disappear. -->
                 <td>
                   <select
-                    class="avail-select"
+                    class="avail-select form-select"
                     :value="m.availability || 'active'"
                     :disabled="availBusy === m.id"
                     :title="'active — schedulable · pause — no new tasks · drain — reschedule its tasks away (do this before a reboot; they do not come back on their own)'"
@@ -1515,7 +1515,7 @@ const gwBadge = computed(() => {
                   Connectivity
                   <FieldInfo :items="CONNECTIVITY_TYPES" title="Connectivity types explained" />
                 </span>
-                <select v-model="connForm.connectivity" class="form-input">
+                <select v-model="connForm.connectivity" class="form-select">
                   <option v-for="o in CONNECTIVITY_TYPES" :key="o.value" :value="o.value">{{ o.label }}</option>
                 </select>
                 <p class="form-hint">{{ connConnectivityDesc }}</p>
@@ -1529,7 +1529,7 @@ const gwBadge = computed(() => {
                     Access mode
                     <FieldInfo :items="ACCESS_MODES" title="Access modes explained" />
                   </span>
-                  <select v-model="connForm.access_mode" class="form-input">
+                  <select v-model="connForm.access_mode" class="form-select">
                     <option v-for="o in ACCESS_MODES" :key="o.value" :value="o.value">{{ o.label }}</option>
                   </select>
                   <p class="form-hint">{{ connAccessModeDesc }}</p>

@@ -240,7 +240,7 @@ function openLastRun(p: PipelineDefinition) {
                 </div>
                 <div class="form-group">
                   <label class="form-label">Deploy target <span class="text-muted">(for the deploy step)</span></label>
-                  <select v-model="form.application_id" class="form-input" aria-label="Deploy target">
+                  <select v-model="form.application_id" class="form-select" aria-label="Deploy target">
                     <option :value="null">None</option>
                     <option v-for="a in apps" :key="a.id" :value="a.id">{{ a.name }}</option>
                   </select>

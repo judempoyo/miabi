@@ -13,18 +13,59 @@
   --primary-900: #581c87;
 
   --success-50: #f0fdf4;
+  --success-100: #dcfce7;
+  --success-200: #bbf7d0;
+  --success-300: #86efac;
+  --success-400: #4ade80;
   --success-500: #22c55e;
   --success-600: #16a34a;
-  --success-700: #15803d;
+  --success-700: #15803d;  
+  --success-800: #166534;
+  --success-900: #14532d;
 
   --warning-50: #fffbeb;
+  --warning-100: #fef3c7;
+  --warning-200: #fde68a;
+  --warning-300: #fcd34d;
+  --warning-400: #fbbf24;
   --warning-500: #f59e0b;
   --warning-600: #d97706;
+  --warning-700: #b45309;
+  --warning-800: #92400e;
+  --warning-900: #78350f;
 
   --danger-50: #fef2f2;
+  --danger-100: #fee2e2;
+  --danger-200: #fecaca;
+  --danger-300: #fca5a5;
+  --danger-400: #f87171;
   --danger-500: #ef4444;
   --danger-600: #dc2626;
   --danger-700: #b91c1c;
+  --danger-800: #991b1b;
+  --danger-900: #7f1d1d;
+
+  --info-50: #f0f9ff;
+  --info-100: #e0f2fe;
+  --info-200: #bae6fd;
+  --info-300: #7dd3fc;
+  --info-400: #38bdf8;
+  --info-500: #0ea5e9;
+  --info-600: #0284c7;
+  --info-700: #0369a1;
+  --info-800: #075985;
+  --info-900: #0c4a6e;
+
+  --secondary-50: #f8fafc;
+  --secondary-100: #f1f5f9;
+  --secondary-200: #e2e8f0;
+  --secondary-300: #cbd5e1;
+  --secondary-400: #94a3b8;
+  --secondary-500: #64748b;
+  --secondary-600: #475569;
+  --secondary-700: #334155;
+  --secondary-800: #1e293b;
+  --secondary-900: #0f172a;
 
   /* Semantic tokens */
   --bg-primary: #ffffff;
@@ -62,7 +103,6 @@
 
   --checkmark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='black'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='m4.5 12.75 6 6 9-13.5' /%3E%3C/svg%3E");
   --checkmark-color: #581c87
-
 }
 
 /* ─── Dark Theme ─── */
@@ -240,10 +280,26 @@ a:hover { color: var(--primary-600); }
 
 /* ─── form select picker  ───  */
 
+/* disable dfault select apparance */
+.form-select,
+.form-select::picker(select) {
+  appearance: base-select;
+}
 /* form select custom styles */
 .form-select {
-  background-color: var(--bg-input);
-  cursor: pointer;
+  background-color: var(--bg-input);;
+  cursor: pointer; 
+}
+.form-select::picker(select) {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  min-width: anchor-size(width);
+  margin-top: 4px;
+  scrollbar-width: auto; 
+  scrollbar-color: var(--border-primary) var(--bg-secondary);
 }
 .form-select option {
   padding: 8px 12px;
@@ -291,6 +347,13 @@ option::checkmark {
 .form-input::placeholder,
 .form-textarea::placeholder { color: var(--text-muted); }
 
+.form-input {
+  color-scheme: light;
+}
+
+[data-theme="dark"] .form-input {
+  color-scheme: dark; 
+}
 .form-textarea {
   min-height: 100px;
   resize: vertical;
@@ -308,6 +371,8 @@ option::checkmark {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
   transition: background var(--transition-slow), border-color var(--transition-slow);
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .card-header {
@@ -322,8 +387,16 @@ option::checkmark {
 .card-body { padding: 24px; }
 
 /* ─── Tables ─── */
-.table-wrapper { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
+.table-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 90vw;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-muted) transparent;
+}
+
+table { width: 100%; border-collapse: collapse;  min-width: 500px;}
 
 th {
   text-align: left;
@@ -351,6 +424,19 @@ tbody tr:last-child td { border-bottom: none; }
 tr { transition: background var(--transition); }
 tbody tr:hover td { background: var(--bg-hover); }
 
+/* th:first-child, td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  background: var(--bg-surface, var(--bg-primary));
+  box-shadow: 2px 0 5px -2px rgba(0, 0, 0, 0.1);
+} */
+.table-desc {  
+    max-width: 80px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 /* ─── Badges ─── */
 .badge {
   display: inline-flex;
@@ -618,6 +704,7 @@ tbody tr:hover td { background: var(--bg-hover); }
 
 /* ─── Loading ─── */
 .spinner {
+  display: inline-block;
   width: 18px;
   height: 18px;
   border: 2px solid var(--border-primary);
@@ -887,7 +974,7 @@ input[type="checkbox"]:checked::before {
 .avatar-sm { width: 26px; height: 26px; font-size: 11px; }
 
 /* Right-aligned row action cluster — keeps icon buttons from wrapping oddly. */
-.table-actions { display: flex; align-items: center; gap: 4px; justify-content: flex-end; }
+.table-actions { display: inline-flex; align-items: center; gap: 4px; justify-content: flex-end; }
 
 /* Clickable table rows (navigate on click; inner buttons use @click.stop). */
 .row-clickable { cursor: pointer; }
@@ -1016,3 +1103,53 @@ input[type="checkbox"]:checked::before {
 .worldmap-tip { position: absolute; pointer-events: none; background: var(--bg-sidebar); color: #fff; padding: 5px 9px; border-radius: 6px; font-size: 12px; white-space: nowrap; transform: translate(-50%, -130%); z-index: 3; }
 .worldmap-legend { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--text-muted); }
 .worldmap-legend .scale { display: inline-block; width: 120px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--bg-tertiary), var(--primary-500)); }
+
+/* ─── form select picker scrollbar ───  */
+.form-select::picker(select) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-primary) var(--bg-secondary);
+}
+/* medias queries */
+@media (max-width: 639px) {
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+      margin-bottom: 20px;
+      padding-left: 1px;
+      padding-right: 1px;
+}
+  .flex-container {
+    display: flex;
+    flex-direction: column;
+    width: 95%;
+    margin: 0 auto;
+    font-size: 1.2rem;
+  }
+
+  .page-header {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+
+  .page-header-actions {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .page-header-actions .btn {
+    flex: 1;
+  }
+
+  .btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  .page-header h1 {
+    font-size: 18px;
+  }
+}

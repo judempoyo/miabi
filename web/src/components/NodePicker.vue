@@ -40,7 +40,7 @@ function optionLabel(n: PlaceableNode): string {
 <template>
   <div v-if="hasChoice" class="form-group">
     <label class="form-label">{{ label || 'Node' }}</label>
-    <select v-model="value" class="form-input" :aria-label="label || 'Node'">
+    <select v-model="value" class="form-select" :aria-label="label || 'Node'">
       <option v-for="n in nodes" :key="n.id" :value="n.is_local ? 0 : n.id" :disabled="!placeable(n)">
         {{ optionLabel(n) }}
       </option>

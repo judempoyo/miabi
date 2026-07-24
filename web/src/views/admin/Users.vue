@@ -204,7 +204,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="form-group">
                 <label class="form-label">Role</label>
-                <select v-model="createForm.role" class="form-input">
+                <select v-model="createForm.role" class="form-select">
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>

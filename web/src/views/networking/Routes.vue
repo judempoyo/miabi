@@ -414,7 +414,7 @@ async function confirmRemove() {
                     <div v-for="(row, i) in hostRows" :key="row.id" class="host-row">
                       <input v-model="row.sub" class="form-input host-sub" placeholder="subdomain (blank = root)" aria-label="Subdomain" />
                       <span class="host-dot">.</span>
-                      <select v-model="row.domain" class="form-input host-domain" aria-label="Domain">
+                      <select v-model="row.domain" class="form-select host-domain" aria-label="Domain">
                         <option v-for="d in domains" :key="d.id" :value="d.name">{{ d.name }}{{ d.verified ? '' : ' — unverified' }}</option>
                       </select>
                       <button type="button" class="btn-icon btn-icon-danger" title="Remove host" aria-label="Remove host" @click="removeHostRow(i)"><span class="mdi mdi-close"></span></button>

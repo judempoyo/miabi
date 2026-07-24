@@ -327,7 +327,7 @@ onMounted(() => {
 
               <div class="form-group">
                 <label class="form-label">Type</label>
-                <select v-model="form.type" class="form-input">
+                <select v-model="form.type" class="form-select">
                   <option value="google">Google</option>
                   <option value="oidc">Generic OIDC</option>
                 </select>
@@ -415,7 +415,7 @@ onMounted(() => {
                     placeholder="Workspace ID"
                     aria-label="Auto-join workspace ID"
                   />
-                  <select v-model="form.default_role" class="form-input" aria-label="Auto-join role">
+                  <select v-model="form.default_role" class="form-select" aria-label="Auto-join role">
                     <option value="">No auto-join</option>
                     <option value="viewer">Viewer</option>
                     <option value="developer">Developer</option>

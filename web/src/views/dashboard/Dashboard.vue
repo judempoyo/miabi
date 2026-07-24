@@ -307,9 +307,11 @@ function relTime(ts: string): string {
           </span>
         </p>
       </div>
+      <div class="page-header-actions">
       <button v-if="ws.canEdit" class="btn btn-primary" @click="router.push('/apps')">
         <span class="mdi mdi-plus"></span> New application
       </button>
+    </div>
     </div>
 
     <!-- Getting-started checklist (first-login onboarding) -->
@@ -322,27 +324,27 @@ function relTime(ts: string): string {
 
     <!-- Quick actions -->
     <div v-if="ws.isWorkspaceContext && ws.canEdit" class="quick-actions">
-      <button class="quick-action card" @click="router.push('/apps')">
+      <button class="quick-action card qa-primary" @click="router.push('/apps')">
         <span class="qa-icon stat-icon-primary"><span class="mdi mdi-cube-outline"></span></span>
         <span class="qa-text"><span class="qa-title">Deploy application</span><span class="qa-sub">From image or Git</span></span>
       </button>
-      <button class="quick-action card" @click="router.push('/databases')">
+      <button class="quick-action card qa-info" @click="router.push('/databases')">
         <span class="qa-icon stat-icon-info"><span class="mdi mdi-database-plus-outline"></span></span>
         <span class="qa-text"><span class="qa-title">New database</span><span class="qa-sub">Postgres, MySQL, Redis…</span></span>
       </button>
-      <button class="quick-action card" @click="router.push('/stacks')">
+      <button class="quick-action card qa-secondary" @click="router.push('/stacks')">
         <span class="qa-icon stat-icon-secondary"><span class="mdi mdi-layers-outline"></span></span>
         <span class="qa-text"><span class="qa-title">Create stack</span><span class="qa-sub">Compose multiple apps</span></span>
       </button>
-      <button class="quick-action card" @click="router.push('/routes')">
+      <button class="quick-action card qa-success" @click="router.push('/routes')">
         <span class="qa-icon stat-icon-success"><span class="mdi mdi-routes"></span></span>
         <span class="qa-text"><span class="qa-title">Add route</span><span class="qa-sub">Expose an app on a domain</span></span>
       </button>
-      <button class="quick-action card" @click="router.push('/secrets')">
+      <button class="quick-action card qa-danger" @click="router.push('/secrets')">
         <span class="qa-icon stat-icon-danger"><span class="mdi mdi-key-variant"></span></span>
         <span class="qa-text"><span class="qa-title">Add secret</span><span class="qa-sub">Store a reusable value</span></span>
       </button>
-      <button class="quick-action card" @click="router.push('/gitops')">
+      <button class="quick-action card qa-warning" @click="router.push('/gitops')">
         <span class="qa-icon stat-icon-warning"><span class="mdi mdi-git"></span></span>
         <span class="qa-text"><span class="qa-title">GitOps</span><span class="qa-sub">Deploy from a Git repo</span></span>
       </button>
@@ -561,9 +563,10 @@ function relTime(ts: string): string {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px 10px;
+  min-width: 0;
 }
-.subtitle strong { color: var(--text-secondary); }
+.subtitle strong { color: var(--text-secondary); word-break: break-word; }
 
 /* Health pill */
 .health-pill {
@@ -605,12 +608,13 @@ function relTime(ts: string): string {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 12px; margin-bottom: 20px;
 }
+
 .quick-action {
   display: flex; align-items: center; gap: 12px; padding: 14px 16px; text-align: left;
   cursor: pointer; background: var(--bg-primary); border: 1px solid var(--border-primary);
   transition: border-color 0.15s, transform 0.15s;
 }
-.quick-action:hover { border-color: var(--primary-400); transform: translateY(-1px); }
+.quick-action:hover { border-color: var(--local-color); transform: translateY(-1px); }
 .qa-icon {
   flex-shrink: 0; width: 38px; height: 38px; border-radius: var(--radius);
   display: inline-flex; align-items: center; justify-content: center; font-size: 20px;
@@ -618,6 +622,66 @@ function relTime(ts: string): string {
 .qa-text { display: flex; flex-direction: column; min-width: 0; }
 .qa-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .qa-sub { font-size: 12px; color: var(--text-muted); }
+
+.quick-action.qa-primary {
+  --local-color: var(--primary-400);
+  --local-bg-hover: var(--primary-50);
+}
+
+.quick-action.qa-secondary {
+  --local-color: var(--secondary-400);
+  --local-bg-hover: var(--secondary-50);
+}
+
+.quick-action.qa-info {
+  --local-color: var(--info-400);
+  --local-bg-hover: var(--info-50);
+}
+
+.quick-action.qa-success {
+  --local-color: var(--success-400);
+  --local-bg-hover: var(--success-50);
+}
+
+.quick-action.qa-warning {
+  --local-color: var(--warning-400);
+  --local-bg-hover: var(--warning-50);
+}
+
+.quick-action.qa-danger {
+  --local-color: var(--danger-400);
+  --local-bg-hover: var(--danger-50);
+}
+
+[data-theme="dark"] .quick-action.qa-primary {
+  --local-color: var(--primary-800);
+  --local-bg-hover: var(--primary-50);
+}
+
+[data-theme="dark"] .quick-action.qa-secondary {
+  --local-color: var(--secondary-600);
+  --local-bg-hover: var(--secondary-50);
+}
+
+[data-theme="dark"] .quick-action.qa-info {
+  --local-color: var(--info-800);
+  --local-bg-hover: var(--info-50);
+}
+
+[data-theme="dark"] .quick-action.qa-success {
+  --local-color: var(--success-800);
+  --local-bg-hover: var(--success-50);
+}
+
+[data-theme="dark"] .quick-action.qa-warning {
+  --local-color: var(--warning-800);
+  --local-bg-hover: var(--warning-50);
+}
+
+[data-theme="dark"] .quick-action.qa-danger {
+  --local-color: var(--danger-800);
+  --local-bg-hover: var(--danger-50);
+}
 
 .stat-card-clickable { cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
 .stat-card-clickable:hover { border-color: var(--border-primary); transform: translateY(-1px); }
@@ -644,6 +708,7 @@ function relTime(ts: string): string {
 .net-figure small { font-size: 11px; font-weight: 400; color: var(--text-muted); }
 
 .invites-card { margin-bottom: 20px; border-color: var(--primary-500); }
+[data-theme="dark"] .invites-card {border-color: var(--primary-900);}
 .invites-card .card-header h2 { display: flex; align-items: center; gap: 8px; }
 .invites { list-style: none; margin: 0; padding: 0; }
 .invite {
@@ -665,6 +730,7 @@ function relTime(ts: string): string {
   0% { background: var(--primary-50); }
   100% { background: transparent; }
 }
+
 .event-icon {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center; font-size: 16px;
@@ -677,4 +743,15 @@ function relTime(ts: string): string {
 .event-msg { font-size: 14px; color: var(--text-primary); }
 .event-time { flex-shrink: 0; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .event-type { font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+@media (max-width: 639px) {
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    margin-bottom: 20px;
+    padding-left: 1px;
+    padding-right: 1px;
+  }
+}
 </style>
