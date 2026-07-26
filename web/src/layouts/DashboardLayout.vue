@@ -1094,6 +1094,11 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 /* ─── Main wrapper ─── */
 .main-wrapper {
   flex: 1;
+  /* Allow this flex item to shrink below its content's intrinsic width.
+     Without it, a wide table forces the whole wrapper (topbar included) past
+     the viewport edge and the page scrolls sideways instead of the table
+     scrolling inside its own wrapper. */
+  min-width: 0;
   margin-left: 240px;
   display: flex;
   flex-direction: column;
@@ -1346,6 +1351,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 /* ─── Main content ─── */
 .main-content {
   flex: 1;
+  min-width: 0;
   padding: 28px;
 }
 
