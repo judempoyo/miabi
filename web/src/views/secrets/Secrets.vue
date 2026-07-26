@@ -184,7 +184,6 @@ const refForName = computed(() => `\${{ secrets.${form.value.name || 'name'} }}`
               <tr>
                 <th>Name</th>
                 <th>Reference</th>
-                <th>Description</th>
                 <th>Version</th>
                 <th></th>
               </tr>
@@ -201,11 +200,6 @@ const refForName = computed(() => `\${{ secrets.${form.value.name || 'name'} }}`
                   {{ reference(s) }}
                   <button class="btn-icon btn-icon-muted" title="Copy reference" aria-label="Copy reference"
                     @click.stop="copy(reference(s))"><span class="mdi mdi-content-copy"></span></button>
-                </td>
-                <td class="cell-sub">
-                  <div class="table-desc">
-                    {{ s.description || '—' }}
-                  </div>
                 </td>
                 <td class="cell-sub">v{{ s.version }}</td>
                 <td class="text-right">

@@ -1108,40 +1108,32 @@ input[type="checkbox"]:checked::before {
   scrollbar-width: thin;
   scrollbar-color: var(--border-primary) var(--bg-secondary);
 }
-/* medias queries */
+/* ─── Mobile (≤639px) ─── */
 @media (max-width: 639px) {
-    .stats-grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 4px;
-      margin-bottom: 20px;
-      padding-left: 1px;
-      padding-right: 1px;
-}
-  .flex-container {
-    display: flex;
-    flex-direction: column;
-    width: 95%;
-    margin: 0 auto;
-    font-size: 1.2rem;
+  .stats-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-bottom: 20px;
   }
 
+  /* Stack the title above its actions; keep both left-aligned (not centered). */
   .page-header {
-    display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 16px;
-    margin-bottom: 28px;
+    gap: 12px;
+    margin-bottom: 20px;
   }
 
+  .page-header h1 {
+    font-size: 18px;
+  }
+
+  /* Actions wrap onto their own row, each button sized to its content — not
+     stretched full-width. */
   .page-header-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
-    width: 100%;
-  }
-
-  .page-header-actions .btn {
-    flex: 1;
   }
 
   .btn {
@@ -1149,7 +1141,12 @@ input[type="checkbox"]:checked::before {
     font-size: 13px;
   }
 
-  .page-header h1 {
-    font-size: 18px;
+  /* Tighter card padding claws back horizontal space on small screens. */
+  .card-body {
+    padding: 16px;
+  }
+
+  .modal-body {
+    padding: 16px;
   }
 }
