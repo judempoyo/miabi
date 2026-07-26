@@ -945,14 +945,19 @@ input[type="checkbox"]:checked::before {
      <span class="cell-sub">email</span></span></div></td> */
 .cell-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .cell-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+/* max-width gives the ellipsis something to bite against: in an auto-layout
+   table the column would otherwise grow to fit a long value (image ref, git
+   URL, release name) and the truncation would never trigger. */
 .cell-title {
   font-weight: 550;
   color: var(--text-primary);
+  max-width: 280px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cell-sub {
   font-size: 12.5px;
   color: var(--text-muted);
+  max-width: 280px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Right-align + tabular figures for numeric columns (set on th and td). */
@@ -1148,5 +1153,12 @@ input[type="checkbox"]:checked::before {
 
   .modal-body {
     padding: 16px;
+  }
+
+  /* Keep table cells compact so more columns stay on screen; long values
+     truncate with an ellipsis and the table scrolls inside its wrapper. */
+  .cell-title,
+  .cell-sub {
+    max-width: 160px;
   }
 }
