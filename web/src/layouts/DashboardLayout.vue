@@ -453,14 +453,14 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
         <div class="topbar-right">
           <NotificationBell />
           <div class="user-menu">
- 
-          <div class="user-menu-trigger" @click="userMenuOpen = !userMenuOpen">
-            <div class="user-avatar">{{ user?.name?.charAt(0)?.toUpperCase() || '?' }}</div>
-            <div class="user-menu-info">
-              <div class="user-name">{{ user?.name || 'User' }}</div>
-              <div class="user-email">{{ user?.email || '' }}</div>
+            <div class="user-menu-trigger" @click="userMenuOpen = !userMenuOpen">
+              <div class="user-avatar">{{ user?.name?.charAt(0)?.toUpperCase() || '?' }}</div>
+              <div class="user-menu-info">
+                <div class="user-name">{{ user?.name || 'User' }}</div>
+                <div class="user-email">{{ user?.email || '' }}</div>
+              </div>
+              <span class="mdi mdi-chevron-down"></span>
             </div>
-            <span class="mdi mdi-chevron-down"></span>
 
             <Transition name="dropdown">
               <div v-if="userMenuOpen" class="user-dropdown">
@@ -509,7 +509,6 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                 </a>
               </div>
             </Transition>
-            </div>
           </div>
         </div>
       </header>
@@ -1153,22 +1152,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 }
 
 /* ─── User menu ─── */
-/* .user-menu {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background var(--transition);
+/* Positioning context for the absolutely-positioned dropdown below. Without
+   this the dropdown anchors to the sticky topbar and drifts off the trigger. */
+.user-menu {
   position: relative;
-  user-select: none;
-  color: var(--text-secondary);
 }
 
-.user-menu:hover {
-  background: var(--bg-hover);
-} */
 .user-menu-trigger {
   display: flex;
   align-items: center;
