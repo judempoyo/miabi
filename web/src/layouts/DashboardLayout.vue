@@ -19,8 +19,6 @@ const theme = useThemeStore()
 const ws = useWorkspaceStore()
 const notify = useNotificationStore()
 const license = useLicenseStore()
-const userMenuRef = ref<HTMLElement | null>(null)
-const wsSwitcherRef = ref<HTMLElement | null>(null)
 
 const sidebarCollapsed = ref(localStorage.getItem('mb_sidebar_collapsed') === 'true')
 const mobileOpen = ref(false)
@@ -289,16 +287,14 @@ function logout() {
 }
 
 
+// Close on any outside click. Match by class (not a template ref): the workspace
+// switcher is rendered twice — once in the desktop sidebar and once in the mobile
+// sidebar — so a single ref can't cover both. `.closest('.ws-switcher')` keeps a
+// click inside either instance from closing the dropdown it just opened.
 function closeMenus(e: MouseEvent) {
-  const target = e.target as Node
-
-  if (userMenuOpen.value && userMenuRef.value && !userMenuRef.value.contains(target)) {
-    userMenuOpen.value = false
-  }
-
-  if (wsSwitcherOpen.value && wsSwitcherRef.value && !wsSwitcherRef.value.contains(target)) {
-    wsSwitcherOpen.value = false
-  }
+  const target = e.target as Element
+  if (userMenuOpen.value && !target.closest?.('.user-menu')) userMenuOpen.value = false
+  if (wsSwitcherOpen.value && !target.closest?.('.ws-switcher')) wsSwitcherOpen.value = false
 }
 
 // License banner: admins see a warning when the license is in grace, expired,
@@ -388,7 +384,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
       </div>
 
       <!-- Workspace switcher -->
-      <div ref="wsSwitcherRef" class="ws-switcher">
+      <div class="ws-switcher">
         <div class="ws-switcher-toggle" @click="wsSwitcherOpen = !wsSwitcherOpen">
           <div class="ws-switcher-current">
             <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name ||
@@ -456,15 +452,15 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
         </div>
         <div class="topbar-right">
           <NotificationBell />
-          <div class="user-menu" ref="userMenuRef">
- 
-          <div class="user-menu-trigger" @click="userMenuOpen = !userMenuOpen">
-            <div class="user-avatar">{{ user?.name?.charAt(0)?.toUpperCase() || '?' }}</div>
-            <div class="user-menu-info">
-              <div class="user-name">{{ user?.name || 'User' }}</div>
-              <div class="user-email">{{ user?.email || '' }}</div>
+          <div class="user-menu">
+            <div class="user-menu-trigger" @click="userMenuOpen = !userMenuOpen">
+              <div class="user-avatar">{{ user?.name?.charAt(0)?.toUpperCase() || '?' }}</div>
+              <div class="user-menu-info">
+                <div class="user-name">{{ user?.name || 'User' }}</div>
+                <div class="user-email">{{ user?.email || '' }}</div>
+              </div>
+              <span class="mdi mdi-chevron-down"></span>
             </div>
-            <span class="mdi mdi-chevron-down"></span>
 
             <Transition name="dropdown">
               <div v-if="userMenuOpen" class="user-dropdown">
@@ -513,7 +509,6 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
                 </a>
               </div>
             </Transition>
-            </div>
           </div>
         </div>
       </header>
@@ -1099,6 +1094,11 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 /* ─── Main wrapper ─── */
 .main-wrapper {
   flex: 1;
+  /* Allow this flex item to shrink below its content's intrinsic width.
+     Without it, a wide table forces the whole wrapper (topbar included) past
+     the viewport edge and the page scrolls sideways instead of the table
+     scrolling inside its own wrapper. */
+  min-width: 0;
   margin-left: 240px;
   display: flex;
   flex-direction: column;
@@ -1157,22 +1157,12 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 }
 
 /* ─── User menu ─── */
-/* .user-menu {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  border-radius: var(--radius);
-  cursor: pointer;
-  transition: background var(--transition);
+/* Positioning context for the absolutely-positioned dropdown below. Without
+   this the dropdown anchors to the sticky topbar and drifts off the trigger. */
+.user-menu {
   position: relative;
-  user-select: none;
-  color: var(--text-secondary);
 }
 
-.user-menu:hover {
-  background: var(--bg-hover);
-} */
 .user-menu-trigger {
   display: flex;
   align-items: center;
@@ -1361,6 +1351,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 /* ─── Main content ─── */
 .main-content {
   flex: 1;
+  min-width: 0;
   padding: 28px;
 }
 
