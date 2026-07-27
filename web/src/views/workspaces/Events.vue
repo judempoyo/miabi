@@ -99,7 +99,7 @@ function when(ts: string): string {
           <span v-if="s.icon" class="mdi" :class="s.icon"></span> {{ s.label }}
         </button>
       </div>
-      <select v-model="order" class="form-select order-select" title="Sort order" aria-label="Sort order">
+      <select v-model="order" class="form-select order-select" style="max-width: 180px;" title="Sort order" aria-label="Sort order">
         <option value="desc">Recent first</option>
         <option value="asc">Oldest first</option>
       </select>
