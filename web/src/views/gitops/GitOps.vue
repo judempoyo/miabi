@@ -209,7 +209,7 @@ function shortSha(sha?: string) { return sha ? sha.slice(0, 7) : '—' }
         <h1>GitOps</h1>
         <p class="subtitle">Continuously deploy from Git repositories of <code>miabi.io/v1</code> manifests.</p>
       </div>
-        <div v-if="!items.length" class="view-toggle" role="group" aria-label="Display as">
+        <div v-if="items.length" class="view-toggle" role="group" aria-label="Display as">
           <button class="btn-icon" :class="{ active: view === 'list' }" title="List view" aria-label="List view" @click="view = 'list'"><span class="mdi mdi-format-list-bulleted"></span></button>
           <button class="btn-icon" :class="{ active: view === 'grid' }" title="Grid view" aria-label="Grid view" @click="view = 'grid'"><span class="mdi mdi-view-grid"></span></button>
         </div>
