@@ -144,13 +144,11 @@ function onAppChange(e: Event) {
 .a-range-btn.active { background: var(--primary-500); color: #fff;}
 .a-range-btn:disabled { opacity: 0.5; cursor: not-allowed;}
 .a-range-btn .lock { font-size: 12px; margin-left: 4px; opacity: 0.8;}
-.a-export { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.a-export { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; text-decoration: none; cursor: pointer; white-space: nowrap; }
 .a-export:hover { color: var(--text-primary); border-color: var(--primary-500); }
 .a-export.locked { opacity: 0.6; cursor: not-allowed; }
 .a-select,
-.a-export {
-  flex-shrink: 0;
-}
+.a-export {flex-shrink: 0; }
 .a-tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid var(--border-primary); overflow-x: auto; }
 .a-tab { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 2px solid transparent; color: var(--text-muted); text-decoration: none; font-size: 14px; white-space: nowrap; }
 .a-tab:hover { color: var(--text-primary); }

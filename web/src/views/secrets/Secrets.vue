@@ -151,10 +151,8 @@ const refForName = computed(() => `\${{ secrets.${form.value.name || 'name'} }}`
         <div class="text-muted text-sm subtitle">Reference these from any app's env, e.g. <code>{{ refExample }}</code>
           Values are resolved at deploy time and never shown unless revealed.</div>
       </div>
-      <div class="page-header-actions">
         <button v-if="ws.canEdit" class="btn btn-primary" @click="openCreate"><span class="mdi mdi-plus"></span> New
           secret</button>
-      </div>
     </div>
 
     <div class="card">

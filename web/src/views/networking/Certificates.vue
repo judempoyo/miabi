@@ -94,10 +94,8 @@ function open(c: Certificate) { router.push(`/certificates/${c.id}`) }
         <h1>Certificates</h1>
         <div class="text-muted text-sm">Import a TLS certificate once and select it on any route (TLS mode “custom”). ACME certificates are issued automatically by the gateway.</div>
       </div>
-      <div style="display: flex; gap: 10px">
         <button v-if="ws.canEdit && issuableDomains.length" class="btn btn-secondary" @click="openIssue"><span class="mdi mdi-auto-fix"></span> Issue with DNS provider</button>
         <button v-if="ws.canEdit" class="btn btn-primary" @click="openImport"><span class="mdi mdi-plus"></span> Import certificate</button>
-      </div>
     </div>
 
     <div class="card">
