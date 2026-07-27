@@ -209,7 +209,6 @@ function shortSha(sha?: string) { return sha ? sha.slice(0, 7) : '—' }
         <h1>GitOps</h1>
         <p class="subtitle">Continuously deploy from Git repositories of <code>miabi.io/v1</code> manifests.</p>
       </div>
-      <div class="header-actions">
         <div v-if="items.length" class="view-toggle" role="group" aria-label="Display as">
           <button class="btn-icon" :class="{ active: view === 'list' }" title="List view" aria-label="List view" @click="view = 'list'"><span class="mdi mdi-format-list-bulleted"></span></button>
           <button class="btn-icon" :class="{ active: view === 'grid' }" title="Grid view" aria-label="Grid view" @click="view = 'grid'"><span class="mdi mdi-view-grid"></span></button>
@@ -217,7 +216,6 @@ function shortSha(sha?: string) { return sha ? sha.slice(0, 7) : '—' }
         <button v-if="ws.canEdit" class="btn btn-primary" @click="openCreate">
           <span class="mdi mdi-plus"></span> New git source
         </button>
-      </div>
     </div>
 
     <div v-if="loading && items.length === 0" class="card"><div class="card-body"><span class="spinner"></span></div></div>
@@ -509,11 +507,10 @@ function shortSha(sha?: string) { return sha ? sha.slice(0, 7) : '—' }
 
 /* Display disposition (list/grid) */
 .header-actions { display: flex; align-items: center; gap: 10px; }
-.view-toggle { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; overflow: hidden; }
-.view-toggle .btn-icon { border-radius: 0; height: 34px; width: 34px; }
-.view-toggle .btn-icon + .btn-icon { border-left: 1px solid var(--border-primary); }
+.view-toggle { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; overflow: hidden; background: transparent; }
+.view-toggle .btn-icon { border: none; outline: none; border-radius: 0; height: 34px; width: 34px; background: var(--bg-secondary); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.view-toggle .btn-icon+.btn-icon { border-left: 1px solid var(--border-primary); }
 .view-toggle .btn-icon.active { background: var(--primary-600); color: #fff; }
-
 .gitops-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
 .gitops-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .gitops-card:hover { border-color: var(--border-strong, var(--primary-300, var(--border-primary))); }

@@ -605,7 +605,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
           </button>
         </div>
         <div class="ws-switcher">
-          <div class="ws-switcher-toggle" @click="wsSwitcherOpen = !wsSwitcherOpen">
+          <div class="ws-switcher-toggle" @click.stop="wsSwitcherOpen = !wsSwitcherOpen">
             <div class="ws-switcher-current">
               <div class="ws-avatar">{{ (ws.currentWorkspace?.display_name ||
                 ws.currentWorkspace?.name)?.charAt(0)?.toUpperCase() || 'D' }}</div>
@@ -885,8 +885,8 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   top: calc(100% + 2px);
   left: 8px;
   right: 8px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-primary);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--sidebar-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
   padding: 4px;
@@ -901,19 +901,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--sidebar-text);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition);
 }
 
 .ws-switcher-option:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
 }
 
 .ws-switcher-option.active {
-  background: var(--primary-50);
+  background: rgba(168, 85, 247, 0.15);
   color: var(--primary-700);
 }
 
@@ -953,7 +953,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 
 .ws-switcher-divider {
   height: 1px;
-  background: var(--border-primary);
+  background: var(--sidebar-border);
   margin: 4px 6px;
 }
 
@@ -964,15 +964,15 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--sidebar-text);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition);
 }
 
 .ws-switcher-action:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
 }
 
 .ws-switcher-action .mdi {

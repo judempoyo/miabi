@@ -128,7 +128,7 @@ async function confirmDelete() {
 
 <template>
   <div>
-    <div class="section-head">
+    <div class="page-header">
       <p class="subtitle">Send Telegram, Slack, or Discord messages when app events fire — deploys, container crashes, and more.</p>
       <button v-if="ws.isWorkspaceAdmin" class="btn btn-primary" @click="openCreate">
         <span class="mdi mdi-plus"></span> New channel

@@ -80,7 +80,7 @@ function onAppChange(e: Event) {
       <div class="a-controls">
         <select
           :value="appFilter ?? ''"
-          class="a-select"
+          class="form-select a-select" style="max-width: 180px;"
           @change="onAppChange"
         >
           <option value="">All applications</option>
@@ -129,26 +129,37 @@ function onAppChange(e: Event) {
 </template>
 
 <style scoped>
-.a-header { position: sticky; top: 0; z-index: 5; background: var(--bg-primary); padding-bottom: 2px; margin-bottom: 18px; }
-.a-topline { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.a-header { position: sticky; top: 0; z-index: 5; background: var(--bg-primary); padding: 12px 16px 0; margin-bottom: 18px; }
+.a-topline { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 .a-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.a-title h1 { margin: 0; }
+.a-title h1 { margin: 0; font-size: 24px; line-height: 1.2; }
 .a-ns { color: var(--text-muted); font-size: 14px; }
-.a-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.a-controls { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; max-width: 100%;}
 .a-select { padding: 7px 10px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; }
-.a-range { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; overflow: hidden; }
-.a-range-btn { padding: 7px 12px; background: var(--bg-secondary); color: var(--text-muted); border: none; border-left: 1px solid var(--border-primary); cursor: pointer; font-size: 13px; white-space: nowrap; }
-.a-range-btn:first-child { border-left: none; }
-.a-range-btn.active { background: var(--primary-500); color: #fff; }
-.a-range-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.a-range-btn .lock { font-size: 12px; margin-left: 3px; opacity: 0.8; }
-
-.a-export { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.a-range {display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none;}
+.a-range::-webkit-scrollbar { display: none; }
+.a-range::-webkit-scrollbar { display: none; }
+.a-range-btn { height: 34px; padding: 0 12px; background: transparent; color: var(--text-muted); border: none; border-left: 1px solid var(--border-primary); cursor: pointer; font-size: 13px; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; transition: background 0.2s, color 0.2s; }
+.a-range-btn:first-child { border-left: none;}
+.a-range-btn.active { background: var(--primary-500); color: #fff;}
+.a-range-btn:disabled { opacity: 0.5; cursor: not-allowed;}
+.a-range-btn .lock { font-size: 12px; margin-left: 4px; opacity: 0.8;}
+.a-export { height: 34px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-secondary); font-size: 13px; text-decoration: none; cursor: pointer; white-space: nowrap; }
 .a-export:hover { color: var(--text-primary); border-color: var(--primary-500); }
 .a-export.locked { opacity: 0.6; cursor: not-allowed; }
-
+.a-select,
+.a-export {flex-shrink: 0; }
 .a-tabs { display: flex; gap: 4px; margin-top: 16px; border-bottom: 1px solid var(--border-primary); overflow-x: auto; }
 .a-tab { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px; border-bottom: 2px solid transparent; color: var(--text-muted); text-decoration: none; font-size: 14px; white-space: nowrap; }
 .a-tab:hover { color: var(--text-primary); }
 .a-tab.active { color: var(--primary-500); border-bottom-color: var(--primary-500); font-weight: 600; }
+
+@media (max-width: 639px) {
+  .a-topline { flex-direction: column; align-items: stretch; gap: 12px; }
+  .a-controls { width: 100%; flex-wrap: wrap; gap: 8px; }
+  .a-select { flex: 1; max-width: none; min-width: 0; }
+  .a-export { height: 36px; flex-shrink: 0; }
+  .a-range { order: 3; width: 100%; display: flex; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .a-range-btn { flex: 0 0 auto; padding: 0 10px; }
+}
 </style>

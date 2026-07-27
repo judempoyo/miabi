@@ -66,9 +66,13 @@ onBeforeUnmount(() => {
       <span class="mdi mdi-bell-outline"></span>
       <span v-if="unread > 0" class="bell-badge">{{ badge }}</span>
     </button>
+    <Transition name="fade">
+      <div v-if="open" class="bell-overlay" @click="close"></div>
+    </Transition>
 
     <Transition name="dropdown">
       <div v-if="open" class="bell-dropdown" @click.stop>
+        <div class="bell-drag-handle"></div>
         <div class="bell-head">
           <span>Notifications</span>
           <button v-if="unread > 0" class="bell-link" @click="store.markAllRead()">Mark all read</button>
@@ -104,29 +108,213 @@ onBeforeUnmount(() => {
     </Transition>
   </div>
 </template>
-
 <style scoped>
-.bell { position: relative; }
-.bell-btn { position: relative; background: none; border: none; cursor: pointer; color: var(--text-secondary); padding: 8px; border-radius: 8px; font-size: 20px; line-height: 1; }
-.bell-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.bell-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--danger-500); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.bell {
+  position: relative;
+}
 
-.bell-dropdown { position: absolute; top: calc(100% + 8px); right: 0; width: 360px; max-width: 90vw; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,0.25)); overflow: hidden; z-index: 50; }
-.bell-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--border-primary); font-weight: 600; font-size: 14px; color: var(--text-primary); }
-.bell-link { background: none; border: none; cursor: pointer; color: var(--primary-500); font-size: 12px; text-decoration: none; }
-.bell-list { max-height: 380px; overflow-y: auto; }
-.bell-empty { text-align: center; padding: 28px 16px; color: var(--text-muted); font-size: 13px; }
-.bell-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--border-primary); padding: 11px 14px; cursor: pointer; }
-.bell-item:hover { background: var(--bg-hover); }
-.bell-item.unread { background: color-mix(in srgb, var(--primary-500) 6%, transparent); }
-.bell-sev { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
-.sev-crit { color: var(--danger-500); }
-.sev-warn { color: var(--warning-600); }
-.sev-info { color: var(--text-tertiary); }
-.bell-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.bell-title { font-size: 13px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bell-sub { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bell-time { font-size: 11px; color: var(--text-muted); }
-.bell-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary-500); flex-shrink: 0; margin-top: 5px; }
-.bell-foot { padding: 10px 14px; text-align: center; border-top: 1px solid var(--border-primary); }
+.bell-btn {
+  position: relative;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.bell-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.bell-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger-500);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.bell-overlay {
+  display: none;
+}
+/* ──  Desktop Dropdown (default) ── */
+.bell-drag-handle {
+  display: none;
+}
+.bell-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0, 0, 0, 0.25));
+  overflow: hidden;
+  z-index: 500;
+}
+
+.bell-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-primary);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.bell-link {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--primary-500);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.bell-list {
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.bell-empty {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.bell-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-primary);
+  padding: 11px 14px;
+  cursor: pointer;
+}
+
+.bell-item:hover {
+  background: var(--bg-hover);
+}
+
+.bell-item.unread {
+  background: color-mix(in srgb, var(--primary-500) 6%, transparent);
+}
+
+.bell-sev {
+  font-size: 18px;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.sev-crit {
+  color: var(--danger-500);
+}
+
+.sev-warn {
+  color: var(--warning-600);
+}
+
+.sev-info {
+  color: var(--text-tertiary);
+}
+
+.bell-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.bell-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bell-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bell-time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.bell-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary-500);
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.bell-foot {
+  padding: 10px 14px;
+  text-align: center;
+  border-top: 1px solid var(--border-primary);
+}
+
+/* ── Mobile Dropdown (Bottom Sheet / Fixed) ── */
+@media (max-width: 639px) {
+  .bell-overlay {
+      display: block;
+      position: fixed;
+      inset: 0;
+      background: var(--overlay, rgba(0, 0, 0, 0.5));
+      backdrop-filter: blur(2px);
+      z-index: 500;
+    }
+        .bell-drag-handle {
+          display: block;
+          width: 36px;
+          height: 4px;
+          background: var(--border-primary);
+          border-radius: 2px;
+          margin: 8px auto 2px;
+        }
+  .bell-dropdown {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100vw;
+    max-width: 100vw;
+    border-radius: 16px 16px 0 0;
+    border-bottom: none;
+    box-shadow: 0 -10px 25px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+  }
+
+  .bell-list {
+    max-height: 70vh;
+  }
+}
 </style>

@@ -1501,7 +1501,7 @@ async function detachDatabase(d: AppDatabase) {
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 app-header-actions">
         <span v-if="app.redeploy_required" class="badge badge-warning" title="Configuration changed since the last deploy — click Redeploy (or Restart) to apply it">
           <span class="mdi mdi-alert-outline"></span> Redeploy required
         </span>
@@ -3161,4 +3161,16 @@ async function detachDatabase(d: AppDatabase) {
 .seg { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; overflow: hidden; }
 .seg-btn { padding: 6px 14px; background: var(--bg-secondary); border: none; cursor: pointer; font-size: 13px; color: var(--text-muted); }
 .seg-btn.active { background: var(--primary-600); color: #fff; }
+@media (max-width: 639px) {
+.app-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+.app-header-actions button {
+  flex: 1;
+  min-width: 80px;
+}}
 </style>

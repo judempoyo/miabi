@@ -99,7 +99,7 @@ function when(ts: string): string {
           <span v-if="s.icon" class="mdi" :class="s.icon"></span> {{ s.label }}
         </button>
       </div>
-      <select v-model="order" class="form-select order-select" title="Sort order" aria-label="Sort order">
+      <select v-model="order" class="form-select order-select" style="max-width: 180px;" title="Sort order" aria-label="Sort order">
         <option value="desc">Recent first</option>
         <option value="asc">Oldest first</option>
       </select>
@@ -156,7 +156,7 @@ function when(ts: string): string {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
-.toolbar .order-select { min-width: 150px; flex: 0 0 auto; margin-left: auto; }
+.toolbar .order-select { min-width: 150px; flex: 0 0 auto; margin-left: auto; padding: 7px 10px; }
 
 /* Severity segmented control */
 .segmented { display: inline-flex; border: 1px solid var(--border-input); border-radius: var(--radius); overflow: hidden; }
@@ -184,4 +184,8 @@ function when(ts: string): string {
 .evt-icon.sev-warning { background: var(--warning-50); color: var(--warning-600); }
 .evt-icon.sev-error { background: var(--danger-50); color: var(--danger-600); }
 .evt-icon.sev-success { background: var(--success-50); color: var(--success-600); }
+@media (max-width: 639px) {
+  .toolbar .order-select { width: 100%; max-width: none !important; margin-left: 0; flex: 1 1 100%;  }
+  .segmented { width: 100%; overflow-x: auto; }
+}
 </style>
