@@ -902,6 +902,15 @@ input[type="checkbox"]:checked::before {
   padding: 4px;
   border-radius: var(--radius);
   width: fit-content;
+
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   padding: 7px 16px;
@@ -1160,5 +1169,15 @@ input[type="checkbox"]:checked::before {
   .cell-title,
   .cell-sub {
     max-width: 160px;
+  }
+
+  .tabs {
+    width: 100%;
+  }
+  
+  .tab {
+    padding: 8px 12px;
+    font-size: 14px;
+    flex-shrink: 0;
   }
 }
