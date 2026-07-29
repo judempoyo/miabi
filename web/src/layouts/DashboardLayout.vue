@@ -885,8 +885,8 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   top: calc(100% + 2px);
   left: 8px;
   right: 8px;
-  background: var(--bg-sidebar);
-  border: 1px solid var(--sidebar-border);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-primary);
   border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
   padding: 4px;
@@ -901,19 +901,19 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--sidebar-text);
+  color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition);
 }
 
 .ws-switcher-option:hover {
-  background: var(--sidebar-hover);
-  color: var(--sidebar-text-active);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .ws-switcher-option.active {
-  background: rgba(168, 85, 247, 0.15);
+  background: var(--primary-50);
   color: var(--primary-700);
 }
 
@@ -953,7 +953,7 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
 
 .ws-switcher-divider {
   height: 1px;
-  background: var(--sidebar-border);
+  background: var(--border-primary);
   margin: 4px 6px;
 }
 
@@ -964,15 +964,15 @@ onBeforeUnmount(() => document.removeEventListener('click', closeMenus))
   padding: 8px 10px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--sidebar-text);
+  color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all var(--transition);
 }
 
 .ws-switcher-action:hover {
-  background: var(--sidebar-hover);
-  color: var(--sidebar-text-active);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .ws-switcher-action .mdi {
