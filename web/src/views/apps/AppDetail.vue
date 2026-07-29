@@ -280,10 +280,25 @@ function depStatusClass(s: string): string {
 const envVars = ref<AppEnvVar[]>([])
 const revealedEnv = ref<Record<string, string>>({}) // key -> revealed secret value
 const revealingEnv = ref('') // key with a reveal request in flight
-const newEnv = ref({ key: '', value: '', secret: false })
+// Add/update env var modal. editingEnvKey is set while updating an existing
+// variable (its name is locked); null when creating a new one.
+const showEnvModal = ref(false)
+const editingEnvKey = ref<string | null>(null)
+const envForm = ref({ key: '', value: '', secret: false })
+const savingEnv = ref(false)
+// Client-side filter over the env list (matches key, and value when not secret).
+const envSearch = ref('')
+const filteredEnvVars = computed(() => {
+  const q = envSearch.value.trim().toLowerCase()
+  if (!q) return envVars.value
+  return envVars.value.filter((e) => e.key.toLowerCase().includes(q) || (!e.is_secret && e.value.toLowerCase().includes(q)))
+})
+const secretEnvCount = computed(() => envVars.value.filter((e) => e.is_secret).length)
 const showEnvImport = ref(false)
 const envImport = ref({ content: '', secret: false })
 const importingEnv = ref(false)
+// Copy feedback: the key of the var whose value was just copied (clears after a beat).
+const copiedEnvKey = ref('')
 
 // Routes (this app's Goma routes)
 const appRoutes = ref<Route[]>([])
@@ -1071,22 +1086,53 @@ async function deleteRelease(r: Release) {
   }
 }
 
-async function setEnv() {
-  if (!wid.value || !newEnv.value.key) return
+// openEnvModal opens the modal to create a new variable; openEnvEdit loads an
+// existing one for update (secret values aren't returned, so they're re-entered).
+function openEnvModal() {
+  editingEnvKey.value = null
+  envForm.value = { key: '', value: '', secret: false }
+  showEnvModal.value = true
+}
+function openEnvEdit(e: AppEnvVar) {
+  editingEnvKey.value = e.key
+  envForm.value = { key: e.key, value: e.is_secret ? '' : e.value, secret: e.is_secret }
+  showEnvModal.value = true
+}
+async function saveEnv() {
+  const key = envForm.value.key.trim()
+  if (!wid.value || !key) return
+  savingEnv.value = true
   try {
-    await appApi.setEnvVar(wid.value, appId.value, newEnv.value.key, newEnv.value.value, newEnv.value.secret)
-    newEnv.value = { key: '', value: '', secret: false }
-    notify.success('Environment variable set' + changeNote())
+    await appApi.setEnvVar(wid.value, appId.value, key, envForm.value.value, envForm.value.secret)
+    notify.success((editingEnvKey.value ? 'Variable updated' : 'Variable added') + changeNote())
+    showEnvModal.value = false
     loadApp()
     loadTab()
-  } catch (e) { notify.apiError(e) }
+  } catch (e) { notify.apiError(e) } finally { savingEnv.value = false }
 }
 
-async function delEnv(key: string) {
+async function delEnv(e: AppEnvVar) {
   if (!wid.value) return
-  await appApi.deleteEnvVar(wid.value, appId.value, key).catch((e: unknown) => notify.apiError(e))
+  if (!(await askConfirm({
+    title: `Delete ${e.key}?`,
+    message: `The variable is removed from ${app.value?.name ?? 'the app'}.${isDeployed.value ? ' Applies on the next deploy.' : ''}`,
+    confirmLabel: 'Delete',
+    variant: 'danger',
+  }))) return
+  await appApi.deleteEnvVar(wid.value, appId.value, e.key).catch((err: unknown) => notify.apiError(err))
   loadTab()
   loadApp() // refresh the "redeploy required" header badge
+}
+
+// Copy an env value to the clipboard (non-secret, or an already-revealed secret).
+async function copyEnvValue(e: AppEnvVar) {
+  const value = e.is_secret ? revealedEnv.value[e.key] : e.value
+  if (value === undefined) return
+  try {
+    await navigator.clipboard.writeText(value)
+    copiedEnvKey.value = e.key
+    setTimeout(() => { if (copiedEnvKey.value === e.key) copiedEnvKey.value = '' }, 1500)
+  } catch (err) { notify.apiError(err, 'Failed to copy') }
 }
 
 // --- Custom container labels (Traefik &c.) ---
@@ -1124,12 +1170,6 @@ async function delLabel(key: string) {
     notify.success('Label removed' + changeNote())
     loadApp()
   } catch (e) { notify.apiError(e) }
-}
-
-// editEnv loads a variable into the inline form to update its value (secret
-// values aren't returned, so they're re-entered).
-function editEnv(e: AppEnvVar) {
-  newEnv.value = { key: e.key, value: e.is_secret ? '' : e.value, secret: e.is_secret }
 }
 
 // Secret env vars are masked in the list; reveal fetches the decrypted value on
@@ -2020,42 +2060,74 @@ async function detachDatabase(d: AppDatabase) {
     <!-- Environment -->
     <div v-else-if="tab === 'environment'" class="card">
       <div class="card-header">
-        <h2>Environment variables</h2>
-        <button v-if="ws.canEdit" class="btn btn-secondary btn-sm" @click="showEnvImport = true"><span class="mdi mdi-import"></span> Import .env</button>
+        <div>
+          <h2>Environment variables</h2>
+          <p class="card-subtitle">Injected into the container at runtime. Reference a workspace secret with <code>{{ secretRefHint }}</code> — <RouterLink to="/secrets">manage secrets</RouterLink>.</p>
+        </div>
+        <div v-if="ws.canEdit" class="flex items-center gap-2">
+          <button class="btn btn-secondary btn-sm" @click="showEnvImport = true"><span class="mdi mdi-import"></span> Import .env</button>
+          <button class="btn btn-primary btn-sm" @click="openEnvModal"><span class="mdi mdi-plus"></span> Add variable</button>
+        </div>
       </div>
-      <div v-if="ws.canEdit" class="card-body" style="border-bottom: 1px solid var(--border-primary)">
-        <form class="flex items-center gap-2" @submit.prevent="setEnv">
-          <input v-model="newEnv.key" class="form-input" aria-label="Environment variable name" placeholder="KEY" style="max-width: 200px" />
-          <input v-model="newEnv.value" class="form-input" aria-label="Environment variable value" placeholder="value" style="max-width: 240px" />
-          <label class="checkbox-label"><input type="checkbox" v-model="newEnv.secret" /> secret</label>
-          <button class="btn btn-primary">Set</button>
-        </form>
-        <p class="text-muted text-sm" style="margin: 8px 0 0">
-          Reference a workspace secret with <code>{{ secretRefHint }}</code> — resolved at deploy time.
-          <RouterLink to="/secrets">Manage secrets</RouterLink>
-        </p>
+
+      <!-- Toolbar: count summary + client-side filter -->
+      <div v-if="envVars.length" class="env-toolbar">
+        <div class="env-stats text-muted text-sm">
+          <strong>{{ envVars.length }}</strong> variable{{ envVars.length === 1 ? '' : 's' }}
+          <span v-if="secretEnvCount" class="env-stats-dot">·</span>
+          <span v-if="secretEnvCount"><span class="mdi mdi-lock-outline"></span> {{ secretEnvCount }} secret</span>
+        </div>
+        <div class="env-search">
+          <span class="mdi mdi-magnify env-search-icon"></span>
+          <input v-model="envSearch" class="form-input" type="search" aria-label="Filter variables" placeholder="Filter variables…" />
+        </div>
       </div>
+
+      <!-- Empty: no variables at all -->
       <div v-if="envVars.length === 0" class="empty-state">
         <span class="mdi mdi-tune-variant" style="font-size: 36px; color: var(--text-muted)"></span>
-        <p>No environment variables.</p>
+        <h3>No environment variables</h3>
+        <p>Add variables to configure your app, or bulk-import an existing .env file.</p>
+        <div v-if="ws.canEdit" class="flex items-center gap-2 mt-4" style="justify-content: center">
+          <button class="btn btn-secondary" @click="showEnvImport = true"><span class="mdi mdi-import"></span> Import .env</button>
+          <button class="btn btn-primary" @click="openEnvModal"><span class="mdi mdi-plus"></span> Add variable</button>
+        </div>
       </div>
+
+      <!-- Empty: filter matched nothing -->
+      <div v-else-if="filteredEnvVars.length === 0" class="empty-state">
+        <span class="mdi mdi-magnify" style="font-size: 36px; color: var(--text-muted)"></span>
+        <p>No variables match “{{ envSearch }}”.</p>
+        <button class="btn btn-ghost btn-sm mt-4" @click="envSearch = ''">Clear filter</button>
+      </div>
+
       <div v-else class="table-wrapper">
         <table>
-          <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+          <thead><tr><th>Key</th><th>Value</th><th class="text-right">Actions</th></tr></thead>
           <tbody>
-            <tr v-for="e in envVars" :key="e.id">
-              <td class="cell-title">{{ e.key }}</td>
-              <td class="text-muted">
+            <tr v-for="e in filteredEnvVars" :key="e.id" class="env-row">
+              <td class="cell-title">
+                <span class="env-key">{{ e.key }}</span>
+                <span v-if="e.is_secret" class="badge badge-neutral env-secret-tag" title="Encrypted at rest"><span class="mdi mdi-lock-outline"></span> secret</span>
+              </td>
+              <td class="text-muted env-value-cell">
                 <template v-if="e.is_secret">
                   <code v-if="revealedEnv[e.key] !== undefined" class="env-revealed">{{ revealedEnv[e.key] }}</code>
-                  <span v-else class="badge badge-neutral">secret</span>
+                  <span v-else class="env-mask" aria-label="Hidden secret value">••••••••••••</span>
                 </template>
-                <template v-else>{{ e.value }}</template>
+                <code v-else class="env-revealed">{{ e.value }}</code>
               </td>
-              <td class="text-right">
+              <td class="text-right env-actions">
+                <button
+                  v-if="!e.is_secret || revealedEnv[e.key] !== undefined"
+                  class="btn-icon btn-icon-muted"
+                  :title="copiedEnvKey === e.key ? 'Copied' : 'Copy value'"
+                  :aria-label="copiedEnvKey === e.key ? 'Copied' : 'Copy value'"
+                  @click="copyEnvValue(e)"
+                ><span class="mdi" :class="copiedEnvKey === e.key ? 'mdi-check text-success' : 'mdi-content-copy'"></span></button>
                 <button v-if="e.is_secret && ws.isWorkspaceAdmin" class="btn-icon btn-icon-muted" :title="revealedEnv[e.key] !== undefined ? 'Hide value' : 'Reveal value'" :aria-label="revealedEnv[e.key] !== undefined ? 'Hide value' : 'Reveal value'" :disabled="revealingEnv === e.key" @click="toggleReveal(e)"><span class="mdi" :class="revealingEnv === e.key ? 'mdi-loading mdi-spin' : (revealedEnv[e.key] !== undefined ? 'mdi-eye-off-outline' : 'mdi-eye-outline')"></span></button>
-                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Edit" aria-label="Edit" @click="editEnv(e)"><span class="mdi mdi-pencil-outline"></span></button>
-                <button v-if="ws.canEdit" class="btn-icon btn-icon-danger" title="Delete" aria-label="Delete" @click="delEnv(e.key)"><span class="mdi mdi-delete-outline"></span></button>
+                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Edit" aria-label="Edit" @click="openEnvEdit(e)"><span class="mdi mdi-pencil-outline"></span></button>
+                <button v-if="ws.canEdit" class="btn-icon btn-icon-danger" title="Delete" aria-label="Delete" @click="delEnv(e)"><span class="mdi mdi-delete-outline"></span></button>
               </td>
             </tr>
           </tbody>
@@ -2757,6 +2829,61 @@ async function detachDatabase(d: AppDatabase) {
       </div>
     </Teleport>
 
+    <!-- Add / update env var -->
+    <Teleport to="body">
+      <div v-if="showEnvModal" class="modal-overlay" @click.self="showEnvModal = false">
+        <div class="modal" style="max-width: 480px; width: 100%">
+          <div class="modal-header">
+            <h3>{{ editingEnvKey ? 'Update variable' : 'Add variable' }}</h3>
+            <button class="btn-icon btn-icon-muted" aria-label="Close" @click="showEnvModal = false"><span class="mdi mdi-close"></span></button>
+          </div>
+          <form @submit.prevent="saveEnv">
+            <div class="modal-body">
+              <div class="form-group">
+                <label class="form-label">Key</label>
+                <input
+                  v-model="envForm.key"
+                  class="form-input mono-input"
+                  :readonly="!!editingEnvKey"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocomplete="off"
+                  placeholder="DATABASE_URL"
+                  required
+                  :autofocus="!editingEnvKey"
+                />
+                <p v-if="editingEnvKey" class="form-hint">The key can't be changed. Delete and re-add to rename.</p>
+              </div>
+              <div class="form-group">
+                <label class="form-label">
+                  Value
+                  <span v-if="editingEnvKey && envForm.secret" class="text-muted">— re-enter (secret values aren't shown)</span>
+                </label>
+                <textarea
+                  v-model="envForm.value"
+                  class="form-input mono-input"
+                  rows="3"
+                  spellcheck="false"
+                  :placeholder="envForm.secret ? 'super-secret-value' : `value or ${secretRefHint}`"
+                ></textarea>
+              </div>
+              <label class="checkbox-label" style="margin-bottom: 0">
+                <input type="checkbox" v-model="envForm.secret" />
+                <span><span class="mdi mdi-lock-outline"></span> Secret — encrypted at rest and masked in the UI</span>
+              </label>
+              <p class="form-hint">
+                Reference a workspace secret with <code>{{ secretRefHint }}</code>.{{ isDeployed ? ' Applies on the next deploy.' : '' }}
+              </p>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" @click="showEnvModal = false">Cancel</button>
+              <button type="submit" class="btn btn-primary" :disabled="savingEnv || !envForm.key.trim()">{{ savingEnv ? 'Saving…' : (editingEnvKey ? 'Update' : 'Add variable') }}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Import .env -->
     <Teleport to="body">
       <div v-if="showEnvImport" class="modal-overlay" @click.self="showEnvImport = false">
@@ -2966,6 +3093,31 @@ async function detachDatabase(d: AppDatabase) {
 </template>
 
 <style scoped>
+/* ─── Environment tab ─── */
+.card-subtitle { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); max-width: 640px; }
+.card-subtitle code { font-size: 12px; }
+.env-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 24px; border-bottom: 1px solid var(--border-primary); flex-wrap: wrap;
+}
+.env-stats { display: flex; align-items: center; gap: 6px; }
+.env-stats strong { color: var(--text-secondary); }
+.env-stats-dot { opacity: 0.5; }
+.env-search { position: relative; }
+.env-search .form-input { width: 240px; max-width: 100%; padding-left: 32px; }
+.env-search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--text-muted); pointer-events: none; font-size: 16px;
+}
+.env-row .cell-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.env-key { font-family: var(--font-mono, monospace); font-size: 13px; }
+.env-secret-tag { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; }
+.env-value-cell { max-width: 420px; }
+.env-mask { letter-spacing: 2px; color: var(--text-muted); }
+.env-actions { white-space: nowrap; }
+.mono-input { font-family: var(--font-mono, monospace); font-size: 13px; }
+.mono-input[readonly] { opacity: 0.7; cursor: not-allowed; }
+.text-success { color: var(--success-500, #22c55e); }
 .env-revealed { word-break: break-all; }
 /* Marketplace-managed notice shown in the Deploy dialog for template apps. */
 .tpl-notice {

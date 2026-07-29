@@ -398,7 +398,7 @@ func (r *Router) adminRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodPut,
-			Path:        "/workspaces/{workspace}/plan",
+			Path:        "/workspaces/{id}/plan",
 			Group:       g,
 			Middlewares: admin,
 			Handler:     okapi.H(r.h.adminPlan.AssignWorkspace),
@@ -407,7 +407,7 @@ func (r *Router) adminRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodGet,
-			Path:        "/workspaces/{workspace}/quota",
+			Path:        "/workspaces/{id}/quota",
 			Group:       g,
 			Middlewares: admin,
 			Handler:     r.h.adminPlan.GetWorkspaceQuota,
@@ -415,7 +415,7 @@ func (r *Router) adminRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodPut,
-			Path:        "/workspaces/{workspace}/quota",
+			Path:        "/workspaces/{id}/quota",
 			Group:       g,
 			Middlewares: admin,
 			Handler:     okapi.H(r.h.adminPlan.SetWorkspaceQuota),
@@ -424,7 +424,7 @@ func (r *Router) adminRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodDelete,
-			Path:        "/workspaces/{workspace}/quota",
+			Path:        "/workspaces/{id}/quota",
 			Group:       g,
 			Middlewares: admin,
 			Handler:     r.h.adminPlan.DeleteWorkspaceQuota,

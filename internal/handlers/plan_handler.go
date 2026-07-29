@@ -221,7 +221,7 @@ func (h *PlanHandler) SetDefault(c *okapi.Context) error {
 
 // AssignWorkspace sets (or clears) a workspace's plan.
 func (h *PlanHandler) AssignWorkspace(c *okapi.Context, req *AssignWorkspacePlanRequest) error {
-	wsID, err := strconv.Atoi(c.Param("workspace"))
+	wsID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || wsID <= 0 {
 		return c.AbortBadRequest("invalid workspace id")
 	}
@@ -305,7 +305,7 @@ func (h *PlanHandler) DeleteWorkspaceQuota(c *okapi.Context) error {
 }
 
 func (h *PlanHandler) workspaceID(c *okapi.Context) (uint, bool) {
-	id, err := strconv.Atoi(c.Param("workspace"))
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		return 0, false
 	}
