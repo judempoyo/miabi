@@ -16,6 +16,16 @@ const router = useRouter()
 const { currentWorkspaceId } = storeToRefs(ws)
 
 const volumes = ref<Volume[]>([])
+// Client-side filter over the list (matches name, docker name, node, driver, mountpoint).
+const search = ref('')
+const filteredVolumes = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return volumes.value
+  return volumes.value.filter((v) =>
+    [v.display_name, v.name, v.docker_name, v.server_name, v.driver, v.mountpoint]
+      .some((f) => (f || '').toLowerCase().includes(q)),
+  )
+})
 const usage = ref<WorkspaceUsage | null>(null)
 const storage = ref<WorkspaceStorage | null>(null)
 // Shared storage (NFS/CIFS) is a plan capability — only constrains the UI when
@@ -149,11 +159,28 @@ function fmtDate(s?: string) {
         <p>Create persistent storage to attach to your applications.</p>
         <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="openCreate">Create a volume</button>
       </div>
-      <div v-else class="table-wrapper">
+      <template v-else>
+        <div class="vol-toolbar">
+          <div class="vol-count text-muted">
+            <strong>{{ filteredVolumes.length }}</strong>
+            <template v-if="filteredVolumes.length !== volumes.length"> of {{ volumes.length }}</template>
+            volume{{ volumes.length === 1 ? '' : 's' }}
+          </div>
+          <div class="vol-search">
+            <span class="mdi mdi-magnify vol-search-icon"></span>
+            <input v-model="search" class="form-input" type="search" aria-label="Filter volumes" placeholder="Filter volumes…" />
+          </div>
+        </div>
+        <div v-if="filteredVolumes.length === 0" class="empty-state">
+          <span class="mdi mdi-magnify" style="font-size: 36px; color: var(--text-muted)"></span>
+          <p>No volumes match “{{ search }}”.</p>
+          <button class="btn btn-ghost btn-sm mt-4" @click="search = ''">Clear filter</button>
+        </div>
+        <div v-else class="table-wrapper">
         <table>
           <thead><tr><th>Volume</th><th>Usage</th><th>Node</th><th>Mountpoint</th><th>Created</th></tr></thead>
           <tbody>
-            <tr v-for="v in volumes" :key="v.id" class="row-clickable" @click="router.push(`/volumes/${v.id}`)">
+            <tr v-for="v in filteredVolumes" :key="v.id" class="row-clickable" @click="router.push(`/volumes/${v.id}`)">
               <td>
                 <div class="cell-id">
                   <span class="avatar avatar-sm"><span class="mdi mdi-harddisk" style="font-size: 14px"></span></span>
@@ -192,7 +219,8 @@ function fmtDate(s?: string) {
             </tr>
           </tbody>
         </table>
-      </div>
+        </div>
+      </template>
     </div>
 
     <Teleport to="body">
@@ -280,6 +308,19 @@ function fmtDate(s?: string) {
 
 <style scoped>
 .subtitle { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+.vol-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 20px; border-bottom: 1px solid var(--border-primary); flex-wrap: wrap;
+}
+.vol-count { font-size: 13px; }
+.vol-count strong { color: var(--text-secondary); }
+.vol-search { position: relative; }
+.vol-search .form-input { width: 260px; max-width: 100%; padding-left: 32px; }
+.vol-search-icon {
+  position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+  color: var(--text-muted); pointer-events: none; font-size: 16px;
+}
 
 .storage-summary { padding: 14px 20px; margin-bottom: 16px; }
 .storage-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

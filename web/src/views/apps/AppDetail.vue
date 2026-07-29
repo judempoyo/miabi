@@ -2233,7 +2233,10 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Volumes -->
     <div v-else-if="tab === 'volumes'" class="card">
-      <div class="card-header"><h2>Attached volumes</h2></div>
+      <div class="card-header">
+        <h2>Attached volumes</h2>
+        <button class="btn btn-ghost btn-sm" @click="router.push('/volumes')">Manage volumes</button>
+      </div>
       <div v-if="ws.canEdit" class="card-body" style="border-bottom: 1px solid var(--border-primary)">
         <form class="flex items-center gap-2" @submit.prevent="attachVolume">
           <select v-model.number="mount.volume_id" class="form-select" aria-label="Volume to attach" style="max-width: 220px">
