@@ -293,6 +293,16 @@ func (p *Producer) EnqueuePipelineRunIn(runID uint, delay time.Duration) error {
 	return err
 }
 
+func (p *Producer) EnqueuePipelineRunToBuilder(runID uint, delay time.Duration) error {
+	payload, err := json.Marshal(RunPipelinePayload{PipelineRunID: runID})
+	if err != nil {
+		return err
+	}
+	task := asynq.NewTask(TypeRunPipeline, payload, asynq.Queue(QueueNode), asynq.MaxRetry(0), asynq.ProcessIn(delay))
+	_, err = p.client.Enqueue(task)
+	return err
+}
+
 // EnqueuePlatformBackup schedules a platform (control-plane) backup to run in
 // the background. Like volume backups it is not auto-retried — a failed run is
 // recorded on the backup row and the admin re-runs it explicitly. It always runs

@@ -85,25 +85,31 @@ type CreateAppRequest struct {
 		// Build config (git source). BuildMethod: auto (default) | dockerfile |
 		// buildpack. Builder optionally overrides the buildpack builder image;
 		// Buildpacks/BuildEnv tune a buildpack build. Rejected for image apps.
-		BuildMethod     string            `json:"build_method" enum:"auto,dockerfile,buildpack"`
-		Builder         string            `json:"builder"`
-		Buildpacks      []string          `json:"buildpacks"`
-		BuildEnv        map[string]string `json:"build_env"`
-		RegistryID      *uint             `json:"registry_id"`
-		GitRepositoryID *uint             `json:"git_repository_id"`
-		StackID         *uint             `json:"stack_id"`
-		NetworkIDs      []uint            `json:"network_ids"`
-		Ports           []PortSpecBody    `json:"ports"`
-		Command         []string          `json:"command"`
-		Port            int               `json:"port"`
-		MemoryBytes     int64             `json:"memory_bytes" min:"0"`
-		NanoCPUs        int64             `json:"nano_cpus" min:"0"`
+		BuildMethod string            `json:"build_method" enum:"auto,dockerfile,buildpack"`
+		Builder     string            `json:"builder"`
+		Buildpacks  []string          `json:"buildpacks"`
+		BuildEnv    map[string]string `json:"build_env"`
+		// UsePipeline adopts the pipeline-as-code the repository carries at
+		// .miabi/pipeline.yaml (git source only), so deploys run through it instead
+		// of building directly. Check with POST /git/inspect first to see whether
+		// the repository has one; a repository that turns out to carry none still
+		// creates the app, which then builds directly.
+		UsePipeline     bool           `json:"use_pipeline"`
+		RegistryID      *uint          `json:"registry_id"`
+		GitRepositoryID *uint          `json:"git_repository_id"`
+		StackID         *uint          `json:"stack_id"`
+		NetworkIDs      []uint         `json:"network_ids"`
+		Ports           []PortSpecBody `json:"ports"`
+		Command         []string       `json:"command"`
+		Port            int            `json:"port"`
+		MemoryBytes     int64          `json:"memory_bytes" min:"0"`
+		NanoCPUs        int64          `json:"nano_cpus" min:"0"`
 		// GPUCount requests whole GPU devices (0 = none); GPUKind narrows to a
 		// vendor/model. Gated by the AllowGPU plan capability.
-		GPUCount        int               `json:"gpu_count" min:"0"`
-		GPUKind         string            `json:"gpu_kind"`
-		RestartPolicy   string            `json:"restart_policy" enum:"no,always,unless-stopped,on-failure"`
-		ImagePullPolicy string            `json:"image_pull_policy" enum:"always,if-not-present,never"`
+		GPUCount        int    `json:"gpu_count" min:"0"`
+		GPUKind         string `json:"gpu_kind"`
+		RestartPolicy   string `json:"restart_policy" enum:"no,always,unless-stopped,on-failure"`
+		ImagePullPolicy string `json:"image_pull_policy" enum:"always,if-not-present,never"`
 		// Cluster runtime (cluster mode). runtime_kind defaults to container;
 		// "service" runs the app as a replicated Swarm service.
 		RuntimeKind          string                   `json:"runtime_kind" enum:"container,service"`
@@ -150,10 +156,10 @@ type UpdateAppRequest struct {
 		NanoCPUs        int64          `json:"nano_cpus" min:"0"`
 		// GPUCount requests whole GPU devices (0 = none); GPUKind narrows to a
 		// vendor/model. Gated by the AllowGPU plan capability.
-		GPUCount        int            `json:"gpu_count" min:"0"`
-		GPUKind         string         `json:"gpu_kind"`
-		RestartPolicy   string         `json:"restart_policy" enum:"no,always,unless-stopped,on-failure"`
-		ImagePullPolicy string         `json:"image_pull_policy" enum:"always,if-not-present,never"`
+		GPUCount        int    `json:"gpu_count" min:"0"`
+		GPUKind         string `json:"gpu_kind"`
+		RestartPolicy   string `json:"restart_policy" enum:"no,always,unless-stopped,on-failure"`
+		ImagePullPolicy string `json:"image_pull_policy" enum:"always,if-not-present,never"`
 		// Cluster runtime. Empty runtime_kind leaves the stored kind unchanged;
 		// replicas <= 0 leaves it unchanged.
 		RuntimeKind          string                   `json:"runtime_kind" enum:"container,service"`
@@ -260,6 +266,7 @@ func (h *ApplicationHandler) Create(c *okapi.Context, req *CreateAppRequest) err
 		BuildMethod: models.AppBuildMethod(req.Body.BuildMethod), Builder: req.Body.Builder,
 		Buildpacks: req.Body.Buildpacks, BuildEnv: req.Body.BuildEnv,
 		RegistryID: req.Body.RegistryID, GitRepositoryID: req.Body.GitRepositoryID,
+		UsePipeline: req.Body.UsePipeline, UserID: userIDPtr(c),
 		StackID:    req.Body.StackID,
 		NetworkIDs: req.Body.NetworkIDs, Ports: toPortSpecs(req.Body.Ports),
 		Command: req.Body.Command, Port: req.Body.Port,
@@ -713,12 +720,26 @@ func (h *ApplicationHandler) Deploy(c *okapi.Context, req *DeployRequest) error 
 	if err != nil {
 		return c.AbortNotFound("application not found")
 	}
-	dep, err := h.svc.Deploy(app, req.Body.RegistryID, req.Body.Tag, models.DeployStrategy(req.Body.Strategy))
+	res, err := h.svc.RequestDeploy(app, req.Body.RegistryID, req.Body.Tag, models.DeployStrategy(req.Body.Strategy), userIDPtr(c))
 	if err != nil {
 		return h.mapErr(c, err)
 	}
 	h.record(c, app.WorkspaceID, "app.deploy", app.ID)
-	return created(c, dep)
+	// An app whose repository owns a pipeline deploys by running it: return the
+	// run so the client follows its logs instead of a deployment's. Only an app
+	// with an adopted pipeline can reach this branch — a direct deploy still
+	// returns the bare Deployment, so existing clients see no change.
+	if res.Run != nil {
+		return created(c, PipelineRunAccepted{Kind: "pipeline_run", Run: res.Run})
+	}
+	return created(c, res.Deployment)
+}
+
+// PipelineRunAccepted is the deploy response for an app whose repository owns a
+// pipeline. Kind discriminates it from the Deployment a direct deploy returns.
+type PipelineRunAccepted struct {
+	Kind string              `json:"kind"` // always "pipeline_run"
+	Run  *models.PipelineRun `json:"run"`
 }
 
 // Start / Stop / Restart act on the app's active release container.

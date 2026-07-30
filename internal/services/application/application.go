@@ -116,6 +116,15 @@ type CreateInput struct {
 	// (Traefik &c.). Reserved keys (io.miabi.*, com.docker.*) are sanitized on
 	// create regardless of caller.
 	ContainerLabels map[string]string
+	// UsePipeline asks Miabi to adopt the pipeline-as-code document the repository
+	// carries (git source only). The caller has normally already confirmed one
+	// exists via the inspect endpoint; adoption re-reads the repository regardless,
+	// and a repository that turns out to carry none is not an error — the app is
+	// created and builds directly.
+	UsePipeline bool
+	// UserID attributes the adopted pipeline's first run. nil for non-interactive
+	// callers (GitOps, marketplace).
+	UserID *uint
 }
 
 type Service struct {
@@ -141,10 +150,32 @@ type Service struct {
 	quota        *quota.Service
 	cluster      ClusterCap
 	netEnsurer   NetworkEnsurer
+	pipelines    Pipelines
 }
 
 // SetQuota wires the plan/quota enforcer (nil-safe; nil skips checks).
 func (s *Service) SetQuota(q *quota.Service) { s.quota = q }
+
+// Pipelines adopts, finds, and triggers the pipeline a repository carries at
+// .miabi/pipeline.yaml. Implemented by pipeline.Service; an interface so this
+// package doesn't depend on the pipeline service (and its git machinery) just to
+// ask whether an app has one.
+type Pipelines interface {
+	// AdoptForApp probes the app's repository and, on finding pipeline-as-code,
+	// creates a repo-owned pipeline bound to the app. Reports
+	// pipeline.ErrNoPipelineInRepo when the repository carries none.
+	AdoptForApp(ctx context.Context, app *models.Application, userID *uint) (*models.PipelineDefinition, error)
+	// RepoPipelineForApp returns the app's enabled repo-owned pipeline, or nil.
+	RepoPipelineForApp(appID uint) (*models.PipelineDefinition, error)
+	// TriggerForApp starts a run of that pipeline.
+	TriggerForApp(app *models.Application, trigger string, userID *uint) (*models.PipelineRun, error)
+	// DeleteForApp drops the app's repo-owned pipelines and unbinds the rest.
+	DeleteForApp(workspaceID, appID uint) error
+}
+
+// SetPipelines wires repository pipeline adoption (nil-safe). Without it, a git
+// app always builds and deploys directly, exactly as before this existed.
+func (s *Service) SetPipelines(p Pipelines) { s.pipelines = p }
 
 // NetworkEnsurer resolves — creating if necessary — a workspace's default,
 // platform-managed Docker network, so every app is guaranteed to join it even
@@ -673,12 +704,18 @@ func deriveLiveStatus(state, health string, restarting, intentionallyStopped boo
 
 // emit records an app event (best-effort; recorder may be nil).
 func (s *Service) emit(app *models.Application, t models.AppEventType, message string) {
+	s.emitSeverity(app, t, models.SeverityInfo, message)
+}
+
+// emitSeverity records an app event at an explicit severity, for outcomes the
+// user should notice but that aren't failures of the operation they asked for.
+func (s *Service) emitSeverity(app *models.Application, t models.AppEventType, sev models.AppEventSeverity, message string) {
 	if s.events == nil {
 		return
 	}
 	s.events.Record(&models.AppEvent{
 		WorkspaceID: app.WorkspaceID, ApplicationID: app.ID,
-		Type: t, Severity: models.SeverityInfo, Message: message,
+		Type: t, Severity: sev, Message: message,
 	})
 }
 
@@ -779,7 +816,7 @@ func (s *Service) Create(workspaceID uint, in CreateInput) (*models.Application,
 		Command: in.Command, Port: in.Port,
 		MemoryBytes: in.MemoryBytes, NanoCPUs: in.NanoCPUs,
 		GPUCount: in.GPUCount, GPUKind: strings.TrimSpace(in.GPUKind),
-		RestartPolicy: normalizeRestartPolicy(in.RestartPolicy),
+		RestartPolicy:        normalizeRestartPolicy(in.RestartPolicy),
 		ImagePullPolicy:      normalizeImagePullPolicy(in.ImagePullPolicy),
 		RuntimeKind:          in.RuntimeKind,
 		Replicas:             in.Replicas,
@@ -835,7 +872,66 @@ func (s *Service) Create(workspaceID uint, in CreateInput) (*models.Application,
 		return nil, err
 	}
 	s.emit(app, models.EventAppCreated, "Application created")
+	s.adoptRepoPipeline(app, in)
 	return app, nil
+}
+
+// adoptRepoPipeline adopts the repository's pipeline-as-code for a newly created
+// git app, when the caller asked for it and the platform allows it.
+//
+// Every failure here is reported and swallowed. The app already exists and is
+// deployable; refusing to return it because a probe clone timed out, or because
+// the repository's pipeline has a typo in it, would be a far worse outcome than
+// falling back to the plain build the user would have got anyway. The reason
+// lands on the app's event feed so it is discoverable rather than silent.
+func (s *Service) adoptRepoPipeline(app *models.Application, in CreateInput) {
+	if !in.UsePipeline || app.SourceType != models.AppSourceGit || s.pipelines == nil {
+		return
+	}
+	if !s.repoPipelinesEnabled() {
+		s.emitSeverity(app, models.EventPipelineAdopted, models.SeverityWarning,
+			"Repository pipelines are disabled on this platform — building directly")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), repoPipelineAdoptTimeout)
+	defer cancel()
+	def, err := s.pipelines.AdoptForApp(ctx, app, in.UserID)
+	switch {
+	case err != nil:
+		logger.Warn("could not adopt the repository's pipeline; the app will build directly",
+			"app", app.Name, "workspace", app.WorkspaceID, "error", err)
+		s.emitSeverity(app, models.EventPipelineAdopted, models.SeverityWarning,
+			"Could not use the repository's pipeline ("+err.Error()+") — building directly")
+	case def != nil:
+		s.emitSeverity(app, models.EventPipelineAdopted, models.SeverityInfo,
+			"Using the pipeline from "+def.SourcePath+" — deploys run through it")
+	}
+}
+
+// repoPipelineAdoptTimeout bounds adoption's probe clone. Generous: it runs
+// after the app is already created, so overshooting costs a slow create, not a
+// failed one.
+const repoPipelineAdoptTimeout = 90 * time.Second
+
+// repoPipelinesEnabled reports the platform kill-switch for adopting pipelines
+// out of repositories. Adoption lets a repository choose the step images and
+// shell commands that run on a runner, so an operator can turn the whole
+// capability off fleet-wide. Default on; an unset provider means on.
+func (s *Service) repoPipelinesEnabled() bool {
+	if s.settings == nil {
+		return true
+	}
+	return s.settings.Bool(settings.KeyRepoPipelinesEnabled, true)
+}
+
+// RepoPipelineForApp returns the repo-owned pipeline that owns this app's
+// deploys, or nil when it deploys directly. Handlers use it to explain the app's
+// build path in the UI.
+func (s *Service) RepoPipelineForApp(appID uint) (*models.PipelineDefinition, error) {
+	if s.pipelines == nil {
+		return nil, nil
+	}
+	return s.pipelines.RepoPipelineForApp(appID)
 }
 
 // SetNetworks attaches the given workspace networks to the app, always including the
@@ -1442,6 +1538,14 @@ func (s *Service) Delete(ctx context.Context, app *models.Application) error {
 	if s.portBindings != nil {
 		_ = s.portBindings.DeleteByApp(app.ID)
 	}
+	// Drop the pipelines the app's repository owned (they exist only to deploy it)
+	// and unbind any hand-written ones, so no definition is left pointing at an
+	// app that no longer exists.
+	if s.pipelines != nil {
+		if err := s.pipelines.DeleteForApp(app.WorkspaceID, app.ID); err != nil {
+			logger.Warn("could not clean up the app's pipelines", "app", app.Name, "error", err)
+		}
+	}
 	return s.apps.Delete(app.ID)
 }
 
@@ -1693,6 +1797,45 @@ func (s *Service) Deploy(app *models.Application, registryOverride *uint, tagOve
 		image = app.ImageRef(tagOverride)
 	}
 	return s.enqueue(app.ID, app.ServerID, image, "manual", regID, s.resolveStrategy(app, strategy))
+}
+
+// DeployResult is what a deploy request produced: a Deployment for an app that
+// builds directly, or the PipelineRun that will build and deploy an app whose
+// repository carries pipeline-as-code. Exactly one is set.
+type DeployResult struct {
+	Deployment *models.Deployment
+	Run        *models.PipelineRun
+}
+
+// RequestDeploy is the user-facing deploy entry point. When the app's repository
+// owns a pipeline, the request starts a pipeline run instead of a direct build,
+// so a deploy can never skip the test and scan steps the repository declares —
+// there is one path to production, not two.
+//
+// Internal redeploys (Start, Restart, rollback, GitOps reconcile) deliberately do
+// not come through here: they re-apply an existing configuration and must not
+// re-run CI.
+func (s *Service) RequestDeploy(app *models.Application, registryOverride *uint, tagOverride string, strategy models.DeployStrategy, userID *uint) (*DeployResult, error) {
+	// Fail rather than guess: if we can't tell whether a pipeline governs this
+	// app, deploying directly would silently skip the steps its repository
+	// declares — exactly the outcome routing through the pipeline exists to
+	// prevent.
+	def, err := s.RepoPipelineForApp(app.ID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the app's pipeline: %w", err)
+	}
+	if def != nil {
+		run, err := s.pipelines.TriggerForApp(app, "manual", userID)
+		if err != nil {
+			return nil, err
+		}
+		return &DeployResult{Run: run}, nil
+	}
+	dep, err := s.Deploy(app, registryOverride, tagOverride, strategy)
+	if err != nil {
+		return nil, err
+	}
+	return &DeployResult{Deployment: dep}, nil
 }
 
 // resolveStrategy picks the effective rollout method: an explicit choice, else

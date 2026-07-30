@@ -67,7 +67,9 @@ func (s *Service) TriggerScheduled(pipelineID uint) (*models.PipelineRun, error)
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	return s.Trigger(p.WorkspaceID, p.ID, TriggerInput{Trigger: "schedule"})
+	// A repo-owned pipeline's scheduled run builds the ref it was adopted from;
+	// SourceRef is empty for a manual pipeline, leaving the branch unset as before.
+	return s.Trigger(p.WorkspaceID, p.ID, TriggerInput{Trigger: "schedule", Branch: p.SourceRef})
 }
 
 // VerifyWebhook checks an inbound push webhook's signature against the pipeline's
@@ -136,7 +138,7 @@ func (s *Service) TriggerPush(workspaceID, pipelineID uint, signature string, bo
 		return nil, false, nil // not an error; this push just doesn't apply
 	}
 	run, err = s.Trigger(workspaceID, pipelineID, TriggerInput{
-		Trigger: "push", Commit: commit, CommitMessage: message,
+		Trigger: "push", Branch: branch, Commit: commit, CommitMessage: message,
 	})
 	if err != nil {
 		return nil, false, err

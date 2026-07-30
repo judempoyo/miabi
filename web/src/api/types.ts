@@ -1883,6 +1883,9 @@ export interface PipelineRunSummary {
   created_at: string
 }
 
+/** Who owns a pipeline's spec: authored in Miabi, or mirrored from a repo file. */
+export type PipelineSource = 'manual' | 'repo'
+
 export interface PipelineDefinition {
   id: number
   workspace_id: number
@@ -1891,6 +1894,14 @@ export interface PipelineDefinition {
   application_id?: number | null
   spec: string
   enabled: boolean
+  /** Absent on pipelines created before repository adoption existed — treat as 'manual'. */
+  source?: PipelineSource
+  /** Repo-relative path the spec is read from, e.g. '.miabi/pipeline.yaml'. */
+  source_path?: string
+  /** Branch the spec is read from. */
+  source_ref?: string
+  /** Commit the stored spec was last read at. */
+  source_commit?: string
   created_at: string
   updated_at: string
   last_run?: PipelineRunSummary | null
@@ -1933,6 +1944,7 @@ export interface PipelineRun {
   number: number
   status: PipelineRunStatus
   trigger: string
+  branch?: string
   commit?: string
   commit_message?: string
   image_id?: number | null

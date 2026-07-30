@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useNotificationStore } from '@/stores/notification'
-import { appApi, type ExternalAccess } from '@/api/apps'
+import { appApi, isPipelineRun, type ExternalAccess, type PipelineRunAccepted } from '@/api/apps'
+import { pipelineApi } from '@/api/pipelines'
 import { volumeApi, monitoringApi, databaseApi, usageApi } from '@/api/resources'
 import { registryApi } from '@/api/registries'
 import { gitRepositoryApi } from '@/api/gitRepositories'
@@ -20,7 +21,7 @@ import LogViewer from '@/components/LogViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import MetadataCard from '@/components/MetadataCard.vue'
 import AppAccessPanel from '@/components/AppAccessPanel.vue'
-import type { Application, AppOverview, Deployment, Release, AppEnvVar, Route, Network, Stack, Volume, StatsSample, Registry, GitRepository, AppEvent, AppPort, PortBinding, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, DatabaseInstance, LogicalDatabase, NodePlacement } from '@/api/types'
+import type { Application, AppOverview, Deployment, Release, AppEnvVar, Route, Network, Stack, Volume, StatsSample, Registry, GitRepository, AppEvent, AppPort, PortBinding, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, DatabaseInstance, LogicalDatabase, NodePlacement, PipelineDefinition } from '@/api/types'
 
 // Secret-reference example built here so `}}` doesn't break the template's
 // mustache parser.
@@ -423,6 +424,45 @@ const deployTag = ref('')
 const deployStrategy = ref<DeployStrategy>('rolling')
 const deploying = ref(false)
 
+// --- Repository pipeline ---
+//
+// When the app's repository carries a pipeline, deploys run through it. The app
+// then has no direct build of its own, which changes what several controls mean:
+// the build-method settings stop applying, and a deploy produces a run rather
+// than a deployment.
+const repoPipeline = ref<PipelineDefinition | null>(null)
+const deploysViaPipeline = computed(() => !!repoPipeline.value)
+
+async function loadRepoPipeline() {
+  repoPipeline.value = null
+  if (!wid.value || app.value?.source_type !== 'git') return
+  try {
+    // Pipelines are listed workspace-wide; find the repo-owned one bound to this
+    // app. Failure is silent — this only enriches the page.
+    const res = await pipelineApi.list(wid.value, 0, 100)
+    repoPipeline.value =
+      (res.data.data ?? []).find((p) => p.application_id === appId.value && p.source === 'repo' && p.enabled) ?? null
+  } catch {
+    repoPipeline.value = null
+  }
+}
+
+/**
+ * Follow whatever a deploy produced. A pipeline run has its own page — that is
+ * where its per-step logs live — while a direct deployment streams into the
+ * Deployments tab as before.
+ */
+function followDeploy(res: Deployment | PipelineRunAccepted, message: string) {
+  if (isPipelineRun(res)) {
+    notify.success(`${message} — pipeline run #${res.run.number} started`)
+    router.push({ name: 'pipeline-run', params: { id: res.run.pipeline_id, runId: res.run.id } })
+    return
+  }
+  notify.success(message)
+  tab.value = 'deployments'
+  streamLogs(res.id)
+}
+
 // Canary (live rollout state derived from the app)
 const canaryActive = computed(() => !!app.value?.canary_release_id)
 const canaryWeight = computed(() => app.value?.canary_weight ?? 0)
@@ -537,6 +577,7 @@ async function loadApp() {
   try {
     app.value = (await appApi.get(wid.value, appId.value)).data.data
     syncSettingsForm()
+    await loadRepoPipeline()
   } catch (e) {
     notify.apiError(e)
   }
@@ -794,10 +835,7 @@ async function requestBind() {
       // Auto-approved (privileged): the port only publishes on the next deploy.
       await loadApp() // refresh the "redeploy required" header indicator
       if (isDeployed.value && await askConfirm({ title: 'Host port bound', message: 'The port only publishes on the next deploy. Redeploy now to publish it?', confirmLabel: 'Redeploy now', cancelLabel: 'Later' })) {
-        const dep = (await appApi.deploy(wid.value, appId.value, {})).data.data
-        notify.success('Redeploying to publish the port')
-        tab.value = 'deployments'
-        streamLogs(dep.id)
+        followDeploy((await appApi.deploy(wid.value, appId.value, {})).data.data, 'Redeploying to publish the port')
       } else {
         notify.success(`Host port bound${changeNote()}`)
       }
@@ -837,10 +875,7 @@ async function removeBind(b: PortBinding) {
     await portBindingApi.cancel(wid.value, b.id)
     appBindings.value = (await portBindingApi.listByApp(wid.value, appId.value)).data.data ?? []
     if (approved && await askConfirm({ title: 'Binding released', message: 'Redeploy now to free the host port?', confirmLabel: 'Redeploy now', cancelLabel: 'Later' })) {
-      const dep = (await appApi.deploy(wid.value, appId.value, {})).data.data
-      notify.success('Redeploying to free the port')
-      tab.value = 'deployments'
-      streamLogs(dep.id)
+      followDeploy((await appApi.deploy(wid.value, appId.value, {})).data.data, 'Redeploying to free the port')
     } else {
       notify.success(approved ? 'Binding released — redeploy the app to free the port' : 'Binding cancelled')
     }
@@ -1028,11 +1063,9 @@ async function confirmDeploy() {
       strategy: deployStrategy.value,
       ...(app.value.source_type === 'image' ? { tag: deployTag.value.trim() } : {}),
     }
-    const dep = (await appApi.deploy(wid.value, appId.value, opts)).data.data
-    notify.success('Deployment started')
+    const res = (await appApi.deploy(wid.value, appId.value, opts)).data.data
     showDeploy.value = false
-    tab.value = 'deployments'
-    streamLogs(dep.id)
+    followDeploy(res, 'Deployment started')
   } catch (e) {
     notify.apiError(e, 'Deploy failed')
   } finally {
@@ -2443,9 +2476,18 @@ async function detachDatabase(d: AppDatabase) {
                 <input v-model="settingsForm.git_ref" class="form-input" placeholder="main" :disabled="!ws.canEdit" />
               </div>
             </div>
+            <div v-if="deploysViaPipeline" class="tpl-notice">
+              <span class="mdi mdi-pipe"></span>
+              <div class="tpl-notice-text">
+                <strong>This app builds through its repository's pipeline.</strong>
+                The steps in <code>{{ repoPipeline?.source_path }}</code> decide how the image is built, so the build
+                method and builder below no longer apply. Edit the file in git, or
+                <router-link :to="{ name: 'pipelines' }">remove the pipeline</router-link> to build directly again.
+              </div>
+            </div>
             <div class="form-group">
               <label class="form-label">Build method</label>
-              <select v-model="settingsForm.build_method" class="form-select" :disabled="!ws.canEdit">
+              <select v-model="settingsForm.build_method" class="form-select" :disabled="!ws.canEdit || deploysViaPipeline">
                 <option value="auto">Auto (recommended)</option>
                 <option value="buildpack">Buildpacks (no Dockerfile)</option>
                 <option value="dockerfile">Dockerfile</option>
@@ -2454,8 +2496,16 @@ async function detachDatabase(d: AppDatabase) {
             </div>
             <div v-if="settingsForm.build_method !== 'dockerfile'" class="form-group">
               <label class="form-label">Builder image <span class="text-muted">(optional, advanced)</span></label>
-              <input v-model="settingsForm.builder" class="form-input" placeholder="paketobuildpacks/builder-jammy-base" :disabled="!ws.canEdit" />
+              <input v-model="settingsForm.builder" class="form-input" placeholder="paketobuildpacks/builder-jammy-base" :disabled="!ws.canEdit || deploysViaPipeline" />
               <p class="form-hint">Override the Cloud Native Buildpacks builder. Leave empty to use the platform default.</p>
+            </div>
+            <div v-if="deploysViaPipeline" class="form-group">
+              <label class="form-label">Deploy on push</label>
+              <p class="form-hint">
+                Miabi runs the pipeline when you deploy. To also run it on every push, add its webhook to your Git
+                provider — the URL and secret are on the
+                <router-link :to="{ name: 'pipelines' }">Pipelines</router-link> page.
+              </p>
             </div>
           </template>
           <div class="form-group">
@@ -3034,6 +3084,15 @@ async function detachDatabase(d: AppDatabase) {
                 </div>
                 <p class="form-hint" style="margin-bottom: 16px">Deploys <code>{{ app.image }}:{{ deployTag.trim() || 'latest' }}</code> as a new release.</p>
               </template>
+              <div v-else-if="deploysViaPipeline" class="tpl-notice" style="margin-bottom: 16px">
+                <span class="mdi mdi-pipe"></span>
+                <div class="tpl-notice-text">
+                  <strong>Deploys run the “{{ repoPipeline?.display_name || repoPipeline?.name }}” pipeline.</strong>
+                  Miabi runs the steps in <code>{{ repoPipeline?.source_path }}</code> on
+                  <code>{{ app.git_ref || 'the default branch' }}</code>; the deploy step rolls out the image they build.
+                  You'll follow the run's logs, not a deployment's.
+                </div>
+              </div>
               <p v-else class="text-muted text-sm" style="margin-bottom: 16px">Builds the latest commit from the configured Git source as a new release.</p>
               <div class="form-group" style="margin-bottom: 8px">
                 <label class="form-label">Deployment strategy</label>

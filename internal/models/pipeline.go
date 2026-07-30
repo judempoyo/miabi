@@ -5,6 +5,18 @@ package models
 
 import "time"
 
+// PipelineSource records who owns a definition's spec.
+type PipelineSource string
+
+const (
+	// PipelineSourceManual is a spec authored in Miabi: the UI and API own it.
+	PipelineSourceManual PipelineSource = "manual"
+	// PipelineSourceRepo is a spec adopted from the repository's pipeline-as-code
+	// file. The repo is the source of truth — the spec is re-read at each run's
+	// commit, and Miabi refuses to edit it in place.
+	PipelineSourceRepo PipelineSource = "repo"
+)
+
 // PipelineDefinition is a versioned, pipeline-as-code definition
 // (kind: Pipeline). The raw YAML spec is stored so the runner reads the same
 // document the repo carries at .miabi/pipeline.yaml.
@@ -25,6 +37,19 @@ type PipelineDefinition struct {
 	// pipeline. Generated on create; never serialized.
 	WebhookSecret string `json:"-" gorm:"not null;default:''"`
 
+	// Source records who owns Spec. An empty value reads as manual, so pipelines
+	// created before repository adoption existed keep behaving exactly as before.
+	Source PipelineSource `json:"source,omitempty" gorm:"not null;default:manual"`
+	// SourcePath is the repo-relative path Spec was read from (repo source only),
+	// e.g. ".miabi/pipeline.yaml".
+	SourcePath string `json:"source_path,omitempty"`
+	// SourceRef is the branch or ref the spec is read from (repo source only).
+	// It is the app's tracked ref at adoption time.
+	SourceRef string `json:"source_ref,omitempty"`
+	// SourceCommit is the commit Spec was last read at (repo source only) — what
+	// the UI shows as "synced from <commit>".
+	SourceCommit string `json:"source_commit,omitempty"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -33,6 +58,10 @@ type PipelineDefinition struct {
 	// the pipeline has never run.
 	LastRun *PipelineRunSummary `json:"last_run,omitempty" gorm:"-"`
 }
+
+// IsRepoOwned reports whether the repository owns this pipeline's spec, which
+// makes it read-only in Miabi and re-read on every run.
+func (p *PipelineDefinition) IsRepoOwned() bool { return p.Source == PipelineSourceRepo }
 
 // PipelineRunSummary is a lightweight view of a run for list contexts — enough
 // to render a status badge and "ran 2h ago" without shipping steps or logs.
@@ -87,7 +116,10 @@ type PipelineRun struct {
 	Number int               `json:"number" gorm:"not null"`
 	Status PipelineRunStatus `json:"status" gorm:"not null;default:pending"`
 	// Trigger records how the run started: push | manual | schedule | upstream.
-	Trigger       string `json:"trigger"`
+	Trigger string `json:"trigger"`
+	// Branch is the ref the run built, surfaced to steps as $MIABI_BRANCH. Set
+	// from the pushed ref, or from the app's tracked ref for a manual run.
+	Branch        string `json:"branch,omitempty"`
 	Commit        string `json:"commit,omitempty"`
 	CommitMessage string `json:"commit_message,omitempty" gorm:"type:text"`
 	// TriggeredByKeyID / TriggeredByUserID attribute the run (mirrors Deployment).

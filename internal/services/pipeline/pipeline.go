@@ -4,11 +4,13 @@
 package pipeline
 
 import (
+	"context"
 	"errors"
 	"strings"
 
 	"github.com/miabi-io/miabi/internal/declarative"
 	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/services/gitrepo"
 	"github.com/miabi-io/miabi/internal/slug"
 	"github.com/miabi-io/miabi/internal/storage/repositories"
 )
@@ -21,6 +23,17 @@ var (
 	ErrInvalidSpec  = errors.New("invalid pipeline spec")
 	ErrDisabled     = errors.New("pipeline is disabled")
 	ErrUnauthorized = errors.New("invalid webhook signature")
+	// ErrRepoOwned rejects an in-place edit of a pipeline the repository owns.
+	// Only its enabled flag can be changed here.
+	ErrRepoOwned = errors.New("this pipeline is managed by its repository — edit the file in git and push, or disable the pipeline to build directly")
+	// ErrNoPipelineInRepo reports a repository that carries no pipeline-as-code
+	// document. It is an ordinary outcome of adoption, not a failure.
+	ErrNoPipelineInRepo = errors.New("repository carries no pipeline-as-code file")
+	// ErrNotGitApp rejects adoption for an app that has no git source to read.
+	ErrNotGitApp = errors.New("application does not build from a git repository")
+	// ErrAdoptionUnavailable reports that repository adoption is not wired up
+	// (no git credential service), so nothing can be discovered.
+	ErrAdoptionUnavailable = errors.New("repository pipeline adoption is not available")
 )
 
 // Enqueuer hands a created run to the background worker. It is an interface so
@@ -35,6 +48,11 @@ type Service struct {
 	repo      *repositories.PipelineRepository
 	enqueuer  Enqueuer
 	scheduler Scheduler
+	// gitRepos and apps back repository-owned pipelines: resolving an app's clone
+	// URL + credential so a spec can be discovered at adoption and re-read at each
+	// run. Both nil-safe — without them a pipeline is manual-only.
+	gitRepos *gitrepo.Service
+	apps     *repositories.ApplicationRepository
 }
 
 func NewService(repo *repositories.PipelineRepository, enqueuer Enqueuer) *Service {
@@ -56,6 +74,13 @@ type Input struct {
 	// Enabled is a pointer so an update can leave it unchanged (nil). On create,
 	// nil is treated as disabled (the zero value), matching the prior behavior.
 	Enabled *bool
+	// Source and the Source* fields mark a definition adopted from a repository's
+	// pipeline-as-code file. They are set by adoption, not by the public API — a
+	// user-authored pipeline leaves them zero and is treated as manual.
+	Source       models.PipelineSource
+	SourcePath   string
+	SourceRef    string
+	SourceCommit string
 }
 
 // Create validates the spec and stores a new pipeline definition.
@@ -74,9 +99,14 @@ func (s *Service) Create(workspaceID uint, in Input) (*models.PipelineDefinition
 	if taken, _ := s.repo.ExistsByName(workspaceID, name); taken {
 		return nil, ErrNameTaken
 	}
+	source := in.Source
+	if source == "" {
+		source = models.PipelineSourceManual
+	}
 	p := &models.PipelineDefinition{
 		WorkspaceID: workspaceID, Name: name, DisplayName: displayName, ApplicationID: in.ApplicationID,
 		Spec: in.Spec, Enabled: in.Enabled != nil && *in.Enabled, WebhookSecret: declarative.RandAlphaNum(40),
+		Source: source, SourcePath: in.SourcePath, SourceRef: in.SourceRef, SourceCommit: in.SourceCommit,
 	}
 	if err := s.repo.Create(p); err != nil {
 		return nil, err
@@ -90,6 +120,19 @@ func (s *Service) Update(workspaceID, id uint, in Input) (*models.PipelineDefini
 	p, err := s.Get(workspaceID, id)
 	if err != nil {
 		return nil, err
+	}
+	// A repo-owned pipeline is a mirror of a file in git, and everything about it
+	// but its enabled flag is derived: the spec from the file (an edit here is
+	// reverted by the next run's re-sync), the name and binding from the app it
+	// was adopted for (unbinding it would orphan the definition — re-sync needs
+	// the app to resolve the clone source, so it would silently freeze on a stale
+	// spec). Refuse the edit and say where it belongs.
+	//
+	// Enabled stays writable on purpose: it is the kill switch you need when the
+	// repository's pipeline is broken and you want deploys to build directly
+	// again without deleting anything.
+	if p.IsRepoOwned() && repoOwnedEditRequested(p, in) {
+		return nil, ErrRepoOwned
 	}
 	if in.Spec != "" {
 		if _, err := ParseSpec([]byte(in.Spec)); err != nil {
@@ -123,6 +166,34 @@ func (s *Service) Update(workspaceID, id uint, in Input) (*models.PipelineDefini
 	}
 	s.applySchedule(p)
 	return p, nil
+}
+
+// repoOwnedEditRequested reports whether an update asks to change something a
+// repository-owned pipeline derives rather than owns. A request that only
+// repeats the stored values (a UI form round-tripping unchanged fields) is not
+// an edit, so it is allowed through — only an actual change is refused.
+func repoOwnedEditRequested(p *models.PipelineDefinition, in Input) bool {
+	if in.Spec != "" && in.Spec != p.Spec {
+		return true
+	}
+	// Tri-state: the caller supplied application_id at all, and it differs.
+	if in.SetApplicationID && !sameAppID(in.ApplicationID, p.ApplicationID) {
+		return true
+	}
+	if name := slug.Make(in.Name, ""); name != "" && name != p.Name {
+		return true
+	}
+	if dn := strings.TrimSpace(in.DisplayName); dn != "" && dn != p.DisplayName {
+		return true
+	}
+	return false
+}
+
+func sameAppID(a, b *uint) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // Get loads a pipeline definition without last-run enrichment. Used by internal
@@ -200,7 +271,10 @@ func (s *Service) Delete(workspaceID, id uint) error {
 
 // TriggerInput attributes and contextualizes a run.
 type TriggerInput struct {
-	Trigger       string // push | manual | schedule | upstream
+	Trigger string // push | manual | schedule | upstream
+	// Branch is the ref being built. It reaches steps as $MIABI_BRANCH and, for a
+	// repo-owned pipeline, selects the ref the spec is re-read from.
+	Branch        string
 	Commit        string
 	CommitMessage string
 	UserID        *uint
@@ -217,6 +291,24 @@ func (s *Service) Trigger(workspaceID, pipelineID uint, in TriggerInput) (*model
 	if !p.Enabled {
 		return nil, ErrDisabled
 	}
+	// A repo-owned pipeline re-reads its document before every run, so the steps
+	// this run executes are the ones the ref actually carries right now. This has
+	// to happen here rather than in the worker: the run's step rows are projected
+	// from the spec a few lines down, and a spec refreshed after that projection
+	// would leave the run executing a stale step list.
+	if p.IsRepoOwned() {
+		if _, err := s.SyncFromRepo(context.Background(), p, in.Branch); err != nil {
+			return nil, err
+		}
+		// Pin the run to the commit the spec was just read at. Two reasons: the
+		// steps and the tree the runner builds then come from one revision, and the
+		// runner checks out by commit — with none it clones the repository's default
+		// branch, which for an app tracking any other branch would silently build
+		// the wrong code.
+		if in.Commit == "" {
+			in.Commit = p.SourceCommit
+		}
+	}
 	spec, err := ParseSpec([]byte(p.Spec))
 	if err != nil {
 		return nil, errors.Join(ErrInvalidSpec, err)
@@ -228,7 +320,7 @@ func (s *Service) Trigger(workspaceID, pipelineID uint, in TriggerInput) (*model
 	run := &models.PipelineRun{
 		WorkspaceID: workspaceID, PipelineID: p.ID, Number: number,
 		Status: models.PipelineRunPending, Trigger: in.Trigger,
-		Commit: in.Commit, CommitMessage: in.CommitMessage,
+		Branch: in.Branch, Commit: in.Commit, CommitMessage: in.CommitMessage,
 		TriggeredByUserID: in.UserID, TriggeredByKeyID: in.APIKeyID,
 	}
 	if err := s.repo.CreateRun(run); err != nil {
