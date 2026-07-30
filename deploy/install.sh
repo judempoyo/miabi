@@ -444,9 +444,11 @@ install_stack() {
   [ -n "$acme" ] && extra+=(--acme-email "$acme")
   [ -n "$admin" ] && extra+=(--admin-email "$admin")
 
-  # Built-in registry. Declining leaves the keys out of the manifest entirely — any
-  # non-empty MIABI_REGISTRY_* is a one-way override that pins the setting out of the
-  # admin UI's reach, so "absent" is the only way to say "the UI decides".
+  # Built-in registry. Enablement and the hostname are environment-only settings the
+  # admin UI shows read-only (the host anchors every stored image reference and
+  # decides which workspace owns an image, so it cannot move at runtime). Declining
+  # leaves the keys out of the manifest, which reads the same as disabled; turning it
+  # on later means editing the manifest and restarting.
   if prompt_yn MIABI_REGISTRY_ENABLED 'Enable the built-in container registry?'; then
     local registry_host
     registry_host="$(prompt MIABI_REGISTRY_HOST 'Registry host' "registry.${domain}")"

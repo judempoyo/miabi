@@ -213,15 +213,16 @@ func (h *PipelineHandler) jobInputs(run *models.PipelineRun, def *models.Pipelin
 	// the same resolved host (login-host ≠ push-host → "denied").
 	reg := h.registryHost()
 	var in runners.JobInputs
-	// Resolve the workspace name — the namespace a user pushes to (Connect tab).
-	// The runner authenticates and pushes exactly like a user; the gateway rewrites
-	// the name to the immutable ws_<id> for storage. Falls back to ws_<id> only if
-	// the name can't be resolved (still valid through the same rewrite).
+	// The push namespace is the immutable ws_<id> form, not the workspace name a
+	// user types. Both authorize identically (the gateway rewrites a name to the
+	// id before storage), but the pushed reference is recorded on the deployment
+	// and re-pulled long afterwards — a rename in between would leave a name-form
+	// reference pointing at nothing, or at whoever has since taken that name.
+	// The workspace name is still resolved: it is the docker-login username.
 	ns := registryserver.Namespace(run.WorkspaceID)
 	if h.workspaces != nil {
 		if ws, err := h.workspaces.FindByID(run.WorkspaceID); err == nil && ws.Name != "" {
 			in.WorkspaceName = ws.Name
-			ns = ws.Name
 		}
 	}
 	in.Run = run
@@ -240,9 +241,9 @@ func (h *PipelineHandler) jobInputs(run *models.PipelineRun, def *models.Pipelin
 			}
 			in.SourceURL = su
 			if reg != "" {
-				// Push under <host>/<workspace-name>/<app-name> (both per-workspace-
-				// unique handles) so the deploy path recognizes it as a build ref and
-				// pulls it with the platform credential.
+				// Push under <host>/ws_<id>/<app-name> so the deploy path recognizes
+				// it as a build ref, and the ownership check on the pull resolves the
+				// namespace back to this workspace.
 				in.Repository = fmt.Sprintf("%s/%s/%s", strings.TrimRight(reg, "/"), ns, app.Name)
 			}
 		}

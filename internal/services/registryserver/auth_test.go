@@ -175,6 +175,58 @@ func TestAuthorizePlatformToken(t *testing.T) {
 	}
 }
 
+// A cross-repository blob mount names its source in the query string, which the
+// gateway's namespace rewrite (a path regex) never touches. Without an explicit
+// check a member of one workspace could push into their own namespace while
+// lifting layers out of another tenant's, needing only a digest.
+func TestAuthorizeBlobMount(t *testing.T) {
+	rw := []string{models.ScopeRead, models.ScopeWrite}
+	const uploads = "/v2/acme/web/blobs/uploads/"
+
+	cases := []struct {
+		name       string
+		svc        *Service
+		uri        string
+		wantStatus int
+	}{
+		{"mount within the workspace is allowed", wsToken(rw), uploads + "?mount=sha256:abc&from=acme/api", http.StatusOK},
+		{"mount within the workspace by id form", wsToken(rw), uploads + "?mount=sha256:abc&from=ws_7/api", http.StatusOK},
+		{"mount from another workspace is refused", wsToken(rw), uploads + "?mount=sha256:abc&from=other/api", http.StatusForbidden},
+		{"mount from another workspace by id form", wsToken(rw), uploads + "?mount=sha256:abc&from=ws_8/api", http.StatusForbidden},
+		{"mount from an unknown namespace", wsToken(rw), uploads + "?mount=sha256:abc&from=ghost/api", http.StatusForbidden},
+		{"plain upload is unaffected", wsToken(rw), uploads, http.StatusOK},
+		{"upload state param is not a mount", wsToken(rw), uploads + "uuid?_state=abc", http.StatusOK},
+		{"mount with no source is not a cross-repo mount", wsToken(rw), uploads + "?mount=sha256:abc", http.StatusOK},
+		// An account-wide token is bound by the same rule: membership of the target
+		// workspace says nothing about the source one.
+		{"user token cannot mount across workspaces", userToken(42, rw), uploads + "?mount=sha256:abc&from=other/api", http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.svc.Authorize(AuthInput{Authorization: basic("acme", "t"), Method: "POST", URI: tc.uri})
+			if got.Status != tc.wantStatus {
+				t.Fatalf("status = %d (%s), want %d", got.Status, got.Reason, tc.wantStatus)
+			}
+		})
+	}
+}
+
+// The platform principal pushes on any workspace's behalf, but a build only ever
+// mounts inside the namespace it is pushing to — so the same rule applies.
+func TestAuthorizePlatformTokenBlobMount(t *testing.T) {
+	svc := &Service{cfg: config.RegistryConfig{PlatformToken: "plat-secret"}, ws: wsFixture(), keys: fakeKeys{err: errors.New("nope")}}
+	auth := basic("_miabi", "plat-secret")
+
+	got := svc.Authorize(AuthInput{Authorization: auth, Method: "POST", URI: "/v2/acme/web/blobs/uploads/?mount=sha256:abc&from=acme/api"})
+	if got.Status != http.StatusOK {
+		t.Errorf("same-namespace mount = %d (%s), want 200", got.Status, got.Reason)
+	}
+	got = svc.Authorize(AuthInput{Authorization: auth, Method: "POST", URI: "/v2/acme/web/blobs/uploads/?mount=sha256:abc&from=other/api"})
+	if got.Status != http.StatusForbidden {
+		t.Errorf("cross-namespace mount = %d (%s), want 403", got.Status, got.Reason)
+	}
+}
+
 func TestParseRepo(t *testing.T) {
 	cases := []struct {
 		uri     string

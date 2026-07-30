@@ -1120,6 +1120,10 @@ func (h *ApplicationHandler) mapErr(c *okapi.Context, err error) error {
 		return c.AbortWithError(409, err)
 	case errors.Is(err, application.ErrNameInvalid):
 		return c.AbortBadRequest(err.Error())
+	case errors.Is(err, application.ErrImageNotPermitted):
+		// A tenant boundary, not a malformed field: the image exists, it just isn't
+		// this workspace's to run.
+		return c.AbortForbidden(err.Error())
 	case errors.Is(err, application.ErrImageRequired), errors.Is(err, application.ErrGitRepoRequired),
 		errors.Is(err, application.ErrBuildConfigOnImage), errors.Is(err, application.ErrInvalidBuildMethod),
 		errors.Is(err, application.ErrInvalidGPUCount):

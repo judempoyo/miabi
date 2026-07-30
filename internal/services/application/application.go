@@ -30,9 +30,13 @@ import (
 )
 
 var (
-	ErrSlugTaken          = errors.New("application name already taken")
-	ErrNameInvalid        = errors.New("name must contain only lowercase letters, digits and hyphens")
-	ErrImageRequired      = errors.New("image is required for image-source applications")
+	ErrSlugTaken     = errors.New("application name already taken")
+	ErrNameInvalid   = errors.New("name must contain only lowercase letters, digits and hyphens")
+	ErrImageRequired = errors.New("image is required for image-source applications")
+	// ErrImageNotPermitted rejects an image that lives in the built-in registry
+	// under a namespace this workspace does not own. Pulling it would use the
+	// platform credential, which every namespace accepts.
+	ErrImageNotPermitted  = errors.New("image is not available to this workspace")
 	ErrGitRepoRequired    = errors.New("git_repo is required for git-source applications")
 	ErrBuildConfigOnImage = errors.New("build configuration is only valid for git-source applications")
 	ErrInvalidBuildMethod = errors.New("invalid build method")
@@ -151,6 +155,7 @@ type Service struct {
 	cluster      ClusterCap
 	netEnsurer   NetworkEnsurer
 	pipelines    Pipelines
+	imageGuard   ImageGuard
 }
 
 // SetQuota wires the plan/quota enforcer (nil-safe; nil skips checks).
@@ -227,6 +232,33 @@ type WorkspaceInfo interface {
 
 // SetWorkspaceInfo wires the resolver used to check a workspace's privileged flag.
 func (s *Service) SetWorkspaceInfo(w WorkspaceInfo) { s.workspaces = w }
+
+// ImageGuard authorizes a user-supplied image reference against the workspace
+// that will run it. Implemented by the built-in registry service; an interface
+// so this package doesn't depend on the registry server.
+//
+// It only constrains references into the built-in registry, where a pull is
+// authenticated with the platform credential rather than the user's — see
+// registryserver.ResolveImageRef. The deploy worker enforces the same rule
+// again; this copy exists so a workspace that types another tenant's image is
+// told so at the point it saves the app, not by a failed deploy later.
+type ImageGuard interface {
+	ValidateImageRef(workspaceID uint, ref string) error
+}
+
+// SetImageGuard wires the internal-registry image check (nil skips it).
+func (s *Service) SetImageGuard(g ImageGuard) { s.imageGuard = g }
+
+// checkImage authorizes an image-source app's reference for the workspace.
+func (s *Service) checkImage(workspaceID uint, image, tag string) error {
+	if s.imageGuard == nil || strings.TrimSpace(image) == "" {
+		return nil
+	}
+	if err := s.imageGuard.ValidateImageRef(workspaceID, models.ComposeImageRef(image, tag)); err != nil {
+		return fmt.Errorf("%w: %w", ErrImageNotPermitted, err)
+	}
+	return nil
+}
 
 // NodeDocker resolves the Docker client for a node id (0 = local).
 type NodeDocker interface {
@@ -759,6 +791,9 @@ func (s *Service) Create(workspaceID uint, in CreateInput) (*models.Application,
 	if in.SourceType == models.AppSourceImage && strings.TrimSpace(in.Image) == "" {
 		return nil, ErrImageRequired
 	}
+	if err := s.checkImage(workspaceID, in.Image, in.Tag); err != nil {
+		return nil, err
+	}
 	if err := validateBuildConfig(in.SourceType, in.BuildMethod, in.Builder, in.Buildpacks, in.BuildEnv); err != nil {
 		return nil, err
 	}
@@ -1031,6 +1066,9 @@ func (s *Service) AppsReferencingSecret(workspaceID uint, name string) ([]models
 func (s *Service) Update(app *models.Application) error {
 	if app.SourceType == models.AppSourceImage {
 		app.Image, app.Tag = normalizeImageTag(app.Image, app.Tag)
+	}
+	if err := s.checkImage(app.WorkspaceID, app.Image, app.Tag); err != nil {
+		return err
 	}
 	if err := s.validateStack(app.WorkspaceID, app.StackID); err != nil {
 		return err

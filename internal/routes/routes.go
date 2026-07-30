@@ -796,6 +796,11 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	// release: the registry service asks the image catalog which digests are held
 	// by a live deployment or a pinned release — the same set GC exempts.
 	registryServerService.SetCatalog(imageService)
+	// Refuse an app whose image points into another workspace's namespace in the
+	// built-in registry, at the moment it is saved. The deploy worker enforces the
+	// same boundary; this makes it a validation error on the form rather than a
+	// failed deployment.
+	appService.SetImageGuard(registryServerService)
 	// Runner job dispatch: sends a build to a runner over its tunnel, mints the
 	// per-job credentials, and streams report frames back onto the run. Returned
 	// so the caller can wire it into the pipeline worker (which holds the tunnels).
