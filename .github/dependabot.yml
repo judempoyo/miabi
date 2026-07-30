@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Web UI (Vue + Vite). Grouped, because 25 direct dependencies on a weekly
+  # cadence otherwise means a steady trickle of one-line PRs; a single grouped
+  # PR is one `npm ci && npm run build` to review instead of a dozen.
+  # Majors stay ungrouped — those are the ones that need reading.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Base images for docker/Dockerfile and docker/Dockerfile.rootless (node,
+  # golang, alpine). Dependabot picks up every file in the directory whose name
+  # contains "dockerfile", so the rootless variant is covered without listing it.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
