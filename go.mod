@@ -27,7 +27,7 @@ require (
 	github.com/miabi-io/wstunnel v0.0.1
 	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/redis/go-redis/v9 v9.20.1
+	github.com/redis/go-redis/v9 v9.21.0
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.51.0
 	gopkg.in/yaml.v3 v3.0.1
