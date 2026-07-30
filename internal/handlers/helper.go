@@ -37,6 +37,17 @@ func message(c *okapi.Context, msg string) error {
 	return ok(c, dto.MessageData{Message: msg})
 }
 
+// userIDPtr returns the request's actor as a pointer, or nil when there is no
+// authenticated user (an API-key call). Services take *uint so a run or record
+// can be left unattributed rather than attributed to user 0.
+func userIDPtr(c *okapi.Context) *uint {
+	id := middlewares.UserID(c)
+	if id == 0 {
+		return nil
+	}
+	return &id
+}
+
 // quotaAbort maps a plan quota / capability error to a 403 response. Returns nil
 // when err is not a quota error, so callers fall through to their own mapping.
 func quotaAbort(c *okapi.Context, err error) error {

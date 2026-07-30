@@ -92,6 +92,15 @@ func (r *PipelineRepository) ListEnabledByApp(appID uint) ([]models.PipelineDefi
 	return out, err
 }
 
+// ListByApp returns every pipeline definition bound to an app, enabled or not.
+// Used when the app is deleted, to clean up the repo-owned ones and unbind the
+// rest.
+func (r *PipelineRepository) ListByApp(appID uint) ([]models.PipelineDefinition, error) {
+	var out []models.PipelineDefinition
+	err := r.db.Where("application_id = ?", appID).Find(&out).Error
+	return out, err
+}
+
 // ListEnabled returns every enabled pipeline definition (cron registration sweep).
 func (r *PipelineRepository) ListEnabled() ([]models.PipelineDefinition, error) {
 	var out []models.PipelineDefinition

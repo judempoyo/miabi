@@ -27,6 +27,9 @@ const (
 	EventSettingsUpdated  AppEventType = "settings.updated"
 	EventAppCreated       AppEventType = "app.created"
 	EventAppDeleted       AppEventType = "app.deleted"
+	// EventPipelineAdopted records the outcome of reading a git app's repository
+	// for pipeline-as-code: adopted, or why it fell back to a direct build.
+	EventPipelineAdopted AppEventType = "pipeline.adopted"
 )
 
 // AppEventSeverity colors an event in the UI.

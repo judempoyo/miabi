@@ -62,6 +62,10 @@ type UpdatePipelineRequest struct {
 
 type TriggerPipelineRequest struct {
 	Body struct {
+		// Branch selects the ref to build. Blank uses the pipeline's tracked ref
+		// (a repo-owned pipeline's source_ref); it also selects the ref a repo-owned
+		// pipeline re-reads its spec from.
+		Branch        string `json:"branch"`
 		Commit        string `json:"commit"`
 		CommitMessage string `json:"commit_message"`
 	} `json:"body"`
@@ -146,7 +150,8 @@ func (h *PipelineHandler) Trigger(c *okapi.Context, req *TriggerPipelineRequest)
 	wsID := middlewares.WorkspaceID(c)
 	actor := middlewares.UserID(c)
 	run, err := h.svc.Trigger(wsID, id, pipeline.TriggerInput{
-		Trigger: "manual", Commit: req.Body.Commit, CommitMessage: req.Body.CommitMessage, UserID: &actor,
+		Trigger: "manual", Branch: req.Body.Branch, Commit: req.Body.Commit,
+		CommitMessage: req.Body.CommitMessage, UserID: &actor,
 	})
 	if err != nil {
 		return h.mapErr(c, err)
@@ -354,6 +359,12 @@ func (h *PipelineHandler) mapErr(c *okapi.Context, err error) error {
 		return c.AbortNotFound("pipeline not found")
 	case errors.Is(err, pipeline.ErrNameTaken):
 		return c.AbortWithError(409, err)
+	case errors.Is(err, pipeline.ErrRepoOwned):
+		// 409: the request is well-formed, but this pipeline's spec lives in git.
+		return c.AbortWithError(409, err)
+	case errors.Is(err, pipeline.ErrNoPipelineInRepo), errors.Is(err, pipeline.ErrNotGitApp),
+		errors.Is(err, pipeline.ErrAdoptionUnavailable):
+		return c.AbortBadRequest(err.Error())
 	case errors.Is(err, pipeline.ErrInvalidSpec), errors.Is(err, pipeline.ErrNameRequired), errors.Is(err, pipeline.ErrDisabled):
 		return c.AbortBadRequest(err.Error())
 	default:

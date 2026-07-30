@@ -31,8 +31,8 @@ from [pipeline.yaml](pipeline.yaml).
 
 ## Keep the spec in your repo: `.miabi/pipeline.yaml`
 
-Version your pipeline-as-code next to the app it deploys — the conventional home
-is **`.miabi/pipeline.yaml`** in the application's repository:
+Version your pipeline-as-code next to the app it deploys — the home Miabi looks
+in is **`.miabi/pipeline.yaml`** in the application's repository:
 
 ```
 your-app/
@@ -42,7 +42,38 @@ your-app/
 └── src/…
 ```
 
-Register it as the pipeline — its contents become the pipeline's stored spec
+### The easy way: let Miabi adopt it
+
+When you create an application from a Git repository, Miabi reads the repository
+and offers to use the pipeline it finds. Accept, and it creates a **repo-owned**
+pipeline bound to the app — no API calls, no copy-pasting.
+
+A repo-owned pipeline is different from one you author in Miabi:
+
+- **The file is the source of truth.** Before every run, Miabi re-reads
+  `.miabi/pipeline.yaml` at the ref being built and runs what it finds. Edit the
+  file and push; there is nothing to re-apply.
+- **It can't be edited in Miabi.** The spec, the name, and the app binding are
+  all derived — from the file and from the app it was adopted for — so a `PATCH`
+  that changes any of them is rejected with `409`. The UI shows the definition
+  read-only behind a *managed by repository* badge. The one exception is
+  `enabled`: disabling a repo-owned pipeline is the kill switch that puts its app
+  back on direct builds without deleting anything.
+- **Deploying the app runs the pipeline.** The app has no separate build of its
+  own, so its build-method settings no longer apply and a deploy returns a
+  pipeline run instead of a deployment. This is the point: a deploy can't skip
+  the test and scan steps the repository declares.
+
+Miabi also accepts `.miabi/pipeline.yml`, `.miabi/pipelines.yaml`, and
+`.miabi/pipelines.yml`; the first that exists wins.
+
+An operator can turn adoption off fleet-wide with the `repo_pipelines_enabled`
+platform setting — git apps then always build and deploy directly.
+
+### The manual way: register the spec yourself
+
+Use this when you want a pipeline Miabi owns (editable in the UI, unaffected by
+what the repo carries). Its contents become the pipeline's stored spec
 (`$APP` = the Git-backed app's id):
 
 ```bash
@@ -66,11 +97,13 @@ curl -X PATCH "$BASE/api/v1/workspaces/$WS/pipelines/$PIPELINE" \
         < .miabi/pipeline.yaml)"
 ```
 
-> **Miabi runs the _stored_ spec, not the repo file.** `.miabi/pipeline.yaml` is
-> your version-controlled source of truth; the calls above copy it into the
-> pipeline record, and that record is what executes at run time. A matching
-> `git push` triggers a run (section 1) but does **not** re-read the file —
-> re-apply after you change it.
+> **A manually registered pipeline runs the _stored_ spec, not the repo file.**
+> The calls above copy `.miabi/pipeline.yaml` into the pipeline record, and that
+> record is what executes at run time. A matching `git push` triggers a run
+> (section 1) but does **not** re-read the file — re-apply after you change it.
+>
+> A **repo-owned** pipeline (adopted at app creation, above) does re-read the
+> file at every run, which is what makes re-applying unnecessary there.
 
 ---
 

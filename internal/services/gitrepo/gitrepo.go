@@ -180,6 +180,38 @@ func (s *Service) TestConnection(ctx context.Context, workspaceID, id uint) erro
 	return nil
 }
 
+// CloneURLAuth resolves an explicit repository URL plus an optional stored
+// credential into the (normalized) clone URL and a go-git auth method, for
+// clones that run in-process on the control plane. Either argument may carry the
+// URL: an empty rawURL falls back to the credential's own URL, matching how the
+// deploy worker resolves an app's git source.
+//
+// Unlike CredentialURL (which embeds the secret in the URL because a remote
+// runner has no other way to receive it), the secret here stays in the auth
+// method and never lands in the URL — so the URL is safe to log or echo back in
+// an error. SSH-key credentials work on this path.
+func (s *Service) CloneURLAuth(workspaceID uint, rawURL string, credentialID *uint) (string, transport.AuthMethod, error) {
+	var g *models.GitRepository
+	if credentialID != nil && *credentialID > 0 {
+		found, err := s.repo.FindInWorkspace(workspaceID, *credentialID)
+		if err != nil {
+			return "", nil, ErrNotFound
+		}
+		g = found
+		if strings.TrimSpace(rawURL) == "" {
+			rawURL = g.URL
+		}
+	}
+	if strings.TrimSpace(rawURL) == "" {
+		return "", nil, ErrURLRequired
+	}
+	auth, err := AuthFor(g)
+	if err != nil {
+		return "", nil, err
+	}
+	return normalizeGitURL(rawURL), auth, nil
+}
+
 // Checkout clones url into dir and checks out ref, returning the resolved commit
 // hash. When ref is empty the cloned HEAD is used. log receives progress lines
 // (nil is allowed). It is the shared clone+checkout path used by both the deploy

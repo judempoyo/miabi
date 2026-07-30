@@ -53,6 +53,13 @@ const (
 	// disabled everywhere regardless of any plan capability; when true, the
 	// per-plan AllowCustomLabels capability decides. Default true.
 	KeyCustomLabelsEnabled = "custom_labels_enabled"
+
+	// KeyRepoPipelinesEnabled is the fleet-wide kill-switch for adopting a
+	// pipeline out of a repository's .miabi/pipeline.yaml. Adopting one lets the
+	// repository choose the step images and shell commands a runner executes, so
+	// an operator can disable the capability entirely; git apps then always build
+	// and deploy directly. Default true.
+	KeyRepoPipelinesEnabled = "repo_pipelines_enabled"
 )
 
 // defaults seeds first-boot values. Keys absent here can still be created by the
@@ -70,6 +77,7 @@ var defaults = []models.Setting{
 	{Key: KeyExternalBaseDomain, Value: "", Type: models.SettingTypeString},
 	{Key: KeyExternalBaseProvider, Value: "", Type: models.SettingTypeString},
 	{Key: KeyCustomLabelsEnabled, Value: "true", Type: models.SettingTypeBool},
+	{Key: KeyRepoPipelinesEnabled, Value: "true", Type: models.SettingTypeBool},
 }
 
 // Provider caches settings in memory and exposes typed getters.

@@ -1,5 +1,19 @@
 import api from './client'
-import type { ApiResponse, Application, AppOverview, AppPort, Deployment, DeploymentLogHistory, Release, AppEnvVar, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, ProcessList, RuntimeKind, ServiceUpdateConfig } from './types'
+import type { ApiResponse, Application, AppOverview, AppPort, Deployment, DeploymentLogHistory, Release, AppEnvVar, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, ProcessList, RuntimeKind, ServiceUpdateConfig, PipelineRun } from './types'
+
+/**
+ * What a deploy returns when the app's repository owns a pipeline: the run that
+ * will build and deploy it, rather than a direct Deployment.
+ */
+export interface PipelineRunAccepted {
+  kind: 'pipeline_run'
+  run: PipelineRun
+}
+
+/** Narrow a deploy response to the pipeline-run case. */
+export function isPipelineRun(d: Deployment | PipelineRunAccepted): d is PipelineRunAccepted {
+  return (d as PipelineRunAccepted)?.kind === 'pipeline_run'
+}
 
 // Cluster runtime fields shared by create/update payloads (cluster mode).
 export interface AppRuntimeInput {
@@ -43,6 +57,12 @@ export interface CreateAppInput extends AppRuntimeInput {
   builder?: string
   buildpacks?: string[]
   build_env?: Record<string, string>
+  /**
+   * Adopt the pipeline-as-code the repository carries at .miabi/pipeline.yaml
+   * (git source only), so deploys run through it instead of building directly.
+   * A repository that turns out to carry none still creates the app.
+   */
+  use_pipeline?: boolean
   registry_id?: number | null
   git_repository_id?: number | null
   stack_id?: number | null
@@ -125,8 +145,13 @@ export const appApi = {
   remove(ws: number, id: number) {
     return api.delete<ApiResponse<{ message: string }>>(`/workspaces/${ws}/apps/${id}`)
   },
+  /**
+   * Deploy. An app whose repository owns a pipeline deploys by running it, so the
+   * response is either a Deployment (built and deployed directly) or a
+   * PipelineRunAccepted. Use `isPipelineRun` to tell them apart.
+   */
   deploy(ws: number, id: number, opts: DeployOptions = {}) {
-    return api.post<ApiResponse<Deployment>>(`/workspaces/${ws}/apps/${id}/deploy`, {
+    return api.post<ApiResponse<Deployment | PipelineRunAccepted>>(`/workspaces/${ws}/apps/${id}/deploy`, {
       registry_id: opts.registry_id ?? null,
       tag: opts.tag ?? '',
       strategy: opts.strategy ?? '',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -92,13 +92,24 @@ function openEdit(p: PipelineDefinition) {
   showModal.value = true
 }
 
+/** A repo-owned pipeline mirrors a file in git; its spec is read-only here. */
+function isRepoOwned(p: PipelineDefinition | null) { return p?.source === 'repo' }
+const editingRepoOwned = computed(() => isRepoOwned(editing.value))
+function shortCommit(sha?: string) { return sha ? sha.slice(0, 7) : '' }
+
 async function save() {
   if (!currentWorkspaceId.value) return
   saving.value = true
   try {
     if (editing.value) {
-      await pipelineApi.update(currentWorkspaceId.value, editing.value.id, form.value)
-      notify.success('Pipeline updated')
+      // A repo-owned pipeline only accepts its enabled flag; everything else is
+      // derived from the repository and the app, and the backend rejects a change
+      // to it. Send just that, so the one editable control still works.
+      const payload: PipelineInput = editingRepoOwned.value
+        ? { name: editing.value.name, spec: '', enabled: form.value.enabled }
+        : form.value
+      await pipelineApi.update(currentWorkspaceId.value, editing.value.id, payload)
+      notify.success(editingRepoOwned.value ? (form.value.enabled ? 'Pipeline enabled' : 'Pipeline disabled') : 'Pipeline updated')
     } else {
       await pipelineApi.create(currentWorkspaceId.value, form.value)
       notify.success('Pipeline created')
@@ -185,7 +196,12 @@ function openLastRun(p: PipelineDefinition) {
                 <div class="cell-id">
                   <span class="avatar avatar-sm"><span class="mdi mdi-pipe" style="font-size: 14px"></span></span>
                   <span class="cell-text">
-                    <span class="cell-title link" @click="openRuns(p)">{{ p.name }}</span>
+                    <span class="cell-title link" @click="openRuns(p)">
+                      {{ p.name }}
+                      <span v-if="isRepoOwned(p)" class="repo-chip" :title="`Spec read from ${p.source_path} on ${p.source_ref || 'the default branch'}`">
+                        <span class="mdi mdi-source-branch"></span> from repo
+                      </span>
+                    </span>
                     <span class="cell-sub" :title="new Date(p.created_at).toLocaleString()">created {{ relativeTime(p.created_at) }}</span>
                   </span>
                 </div>
@@ -213,7 +229,15 @@ function openLastRun(p: PipelineDefinition) {
                 <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Run now" aria-label="Run now" :disabled="triggering === p.id || !p.enabled" @click="trigger(p)">
                   <span class="mdi" :class="triggering === p.id ? 'mdi-loading mdi-spin' : 'mdi-play'"></span>
                 </button>
-                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Edit" aria-label="Edit" @click="openEdit(p)"><span class="mdi mdi-pencil-outline"></span></button>
+                <button
+                  v-if="ws.canEdit"
+                  class="btn-icon btn-icon-muted"
+                  :title="isRepoOwned(p) ? 'View (managed by repository)' : 'Edit'"
+                  :aria-label="isRepoOwned(p) ? 'View' : 'Edit'"
+                  @click="openEdit(p)"
+                >
+                  <span class="mdi" :class="isRepoOwned(p) ? 'mdi-eye-outline' : 'mdi-pencil-outline'"></span>
+                </button>
                 <button v-if="ws.canEdit" class="btn-icon btn-icon-danger" title="Delete" aria-label="Delete" @click="toDelete = p"><span class="mdi mdi-delete-outline"></span></button>
               </td>
             </tr>
@@ -228,33 +252,66 @@ function openLastRun(p: PipelineDefinition) {
       <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
         <div class="modal modal-lg">
           <div class="modal-header">
-            <h3>{{ editing ? 'Edit pipeline' : 'New pipeline' }}</h3>
+            <h3>{{ editing ? (editingRepoOwned ? 'Pipeline' : 'Edit pipeline') : 'New pipeline' }}</h3>
             <button class="btn-icon btn-icon-muted" aria-label="Close" @click="showModal = false"><span class="mdi mdi-close"></span></button>
           </div>
           <form @submit.prevent="save">
             <div class="modal-body">
+              <div v-if="editingRepoOwned" class="repo-notice">
+                <span class="mdi mdi-source-branch"></span>
+                <div>
+                  <strong>Managed by its repository.</strong>
+                  Miabi re-reads <code>{{ editing?.source_path }}</code> on
+                  <code>{{ editing?.source_ref || 'the default branch' }}</code> before every run, so this pipeline
+                  can't be edited here — change the file in git and push. You can still disable it, which makes
+                  <template v-if="appName(editing?.application_id)">{{ appName(editing?.application_id) }}</template>
+                  <template v-else>its application</template>
+                  build and deploy directly again.
+                </div>
+              </div>
               <div class="form-row">
                 <div class="form-group">
                   <label class="form-label">Name</label>
-                  <input v-model="form.name" class="form-input" placeholder="e.g. web" required autofocus aria-label="Name" />
+                  <input v-model="form.name" class="form-input" placeholder="e.g. web" required autofocus aria-label="Name" :disabled="editingRepoOwned" />
                 </div>
                 <div class="form-group">
                   <label class="form-label">Deploy target <span class="text-muted">(for the deploy step)</span></label>
-                  <select v-model="form.application_id" class="form-select" aria-label="Deploy target">
+                  <select v-model="form.application_id" class="form-select" aria-label="Deploy target" :disabled="editingRepoOwned">
                     <option :value="null">None</option>
                     <option v-for="a in apps" :key="a.id" :value="a.id">{{ a.name }}</option>
                   </select>
                 </div>
               </div>
               <div class="form-group" style="margin-bottom: 0">
-                <label class="form-label">Pipeline spec <span class="text-muted">(kind: Pipeline)</span></label>
-                <textarea v-model="form.spec" class="form-textarea code" rows="16" spellcheck="false" required aria-label="Pipeline spec"></textarea>
+                <label class="form-label">
+                  Pipeline spec <span class="text-muted">(kind: Pipeline)</span>
+                  <span v-if="editingRepoOwned" class="repo-chip">
+                    <span class="mdi mdi-source-branch"></span> managed by repository
+                  </span>
+                </label>
+                <textarea
+                  v-model="form.spec"
+                  class="form-textarea code"
+                  rows="16"
+                  spellcheck="false"
+                  required
+                  aria-label="Pipeline spec"
+                  :readonly="editingRepoOwned"
+                ></textarea>
+                <p v-if="editingRepoOwned" class="form-hint">
+                  Read-only.
+                  <template v-if="editing?.source_commit">Synced from commit {{ shortCommit(editing.source_commit) }}.</template>
+                </p>
               </div>
               <label class="check"><input type="checkbox" v-model="form.enabled" /> <span>Enabled</span></label>
             </div>
             <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" @click="showModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? 'Saving…' : (editing ? 'Save' : 'Create') }}</button>
+              <button type="button" class="btn btn-secondary" @click="showModal = false">
+                {{ editingRepoOwned ? 'Close' : 'Cancel' }}
+              </button>
+              <button type="submit" class="btn btn-primary" :disabled="saving">
+                {{ saving ? 'Saving…' : editingRepoOwned ? 'Save enabled state' : editing ? 'Save' : 'Create' }}
+              </button>
             </div>
           </form>
         </div>
@@ -264,7 +321,9 @@ function openLastRun(p: PipelineDefinition) {
     <ConfirmDialog
       :open="!!toDelete"
       title="Delete pipeline"
-      :message="`Delete pipeline &quot;${toDelete?.name}&quot;? Its run history is removed.`"
+      :message="isRepoOwned(toDelete)
+        ? `Delete pipeline &quot;${toDelete?.name}&quot;? Its run history is removed, and its application goes back to building and deploying directly — skipping the steps in ${toDelete?.source_path}.`
+        : `Delete pipeline &quot;${toDelete?.name}&quot;? Its run history is removed.`"
       confirm-label="Delete"
       variant="danger"
       :busy="deleting"
@@ -286,6 +345,22 @@ function openLastRun(p: PipelineDefinition) {
 .link { cursor: pointer; }
 .link:hover { color: var(--primary-500); }
 .code { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; }
+.form-textarea[readonly] { background: var(--bg-tertiary, rgba(127, 127, 127, 0.08)); cursor: default; }
+.repo-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+  padding: 1px 7px; border-radius: 20px; margin-left: 6px; vertical-align: middle;
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12)); color: var(--text-secondary, var(--text-muted));
+}
+.repo-chip .mdi { font-size: 12px; }
+.repo-notice {
+  display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.08));
+  font-size: 13px; line-height: 1.5; color: var(--text-secondary, var(--text-muted));
+}
+.repo-notice .mdi { font-size: 18px; flex-shrink: 0; }
+.repo-notice code { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+.form-input:disabled, .form-select:disabled { opacity: 0.65; cursor: not-allowed; }
 .target-chip {
   display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 2px 9px;
   border-radius: 20px; background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));

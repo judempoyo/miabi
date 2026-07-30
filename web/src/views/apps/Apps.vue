@@ -7,7 +7,7 @@ import { useNotificationStore } from '@/stores/notification'
 import { appApi } from '@/api/apps'
 import { usageApi } from '@/api/resources'
 import { registryApi } from '@/api/registries'
-import { gitRepositoryApi } from '@/api/gitRepositories'
+import { gitRepositoryApi, type GitInspectResult } from '@/api/gitRepositories'
 import { networkApi } from '@/api/networks'
 import { stackApi } from '@/api/stacks'
 import type { Application, Registry, GitRepository, Network, Stack, AppPort, BuildMethod, RuntimeKind } from '@/api/types'
@@ -63,10 +63,69 @@ interface AppForm {
   // Swarm placement constraints, e.g. ["node.id==abc"]. Only meaningful for the
   // service runtime, where the scheduler — not server_id — decides placement.
   placement_constraints: string[]
+  // Adopt the pipeline the repository carries at .miabi/pipeline.yaml. Only
+  // offered once a probe has actually found one.
+  use_pipeline: boolean
 }
 function emptyForm(): AppForm {
-  return { name: '', server_id: 0, source_type: 'image', image: '', tag: '', git_repo: '', git_ref: '', build_method: 'auto', builder: '', registry_id: null, git_repository_id: null, stack_id: null, network_ids: [], ports: [{ container_port: 8080, protocol: 'tcp', scheme: 'http', name: '' }], runtime_kind: 'container', replicas: 1, placement_constraints: [] }
+  return { name: '', server_id: 0, source_type: 'image', image: '', tag: '', git_repo: '', git_ref: '', build_method: 'auto', builder: '', registry_id: null, git_repository_id: null, stack_id: null, network_ids: [], ports: [{ container_port: 8080, protocol: 'tcp', scheme: 'http', name: '' }], runtime_kind: 'container', replicas: 1, placement_constraints: [], use_pipeline: true }
 }
+
+// --- Repository inspection ---
+//
+// Probing clones the repo server-side, so it is deliberately manual: the user
+// asks for it once the URL and branch are filled in. The result decides whether
+// the pipeline toggle is offered at all.
+const inspecting = ref(false)
+const inspected = ref<GitInspectResult | null>(null)
+const inspectError = ref('')
+
+/** Reset the probe whenever the thing being probed changes. */
+function resetInspection() {
+  inspected.value = null
+  inspectError.value = ''
+}
+watch(() => [form.value.git_repo, form.value.git_ref, form.value.git_repository_id], resetInspection)
+
+const canInspect = computed(
+  () => form.value.source_type === 'git' && (!!form.value.git_repo.trim() || !!form.value.git_repository_id),
+)
+
+async function inspectRepo() {
+  if (!currentWorkspaceId.value || !canInspect.value) return
+  inspecting.value = true
+  inspectError.value = ''
+  inspected.value = null
+  try {
+    inspected.value = (
+      await gitRepositoryApi.inspect(currentWorkspaceId.value, {
+        git_repo: form.value.git_repo.trim() || undefined,
+        git_ref: form.value.git_ref.trim() || undefined,
+        git_repository_id: form.value.git_repository_id,
+      })
+    ).data.data ?? null
+    // Default the toggle on when a pipeline is found, off otherwise, so the
+    // create call never claims a pipeline the probe didn't see.
+    form.value.use_pipeline = inspected.value?.has_pipeline === true
+  } catch (e: any) {
+    inspectError.value = e?.response?.data?.message || e?.message || 'Could not read the repository'
+  } finally {
+    inspecting.value = false
+  }
+}
+
+/** A short human summary of when the discovered pipeline runs. */
+const pipelineTriggerLabel = computed(() => {
+  const r = inspected.value
+  if (!r?.has_pipeline) return ''
+  const parts: string[] = []
+  if (r.triggers_push) {
+    parts.push(r.push_branches?.length ? `on push to ${r.push_branches.join(', ')}` : 'on any push')
+  }
+  if (r.schedule) parts.push(`on schedule (${r.schedule})`)
+  if (!parts.length) parts.push('when you deploy')
+  return parts.join(' · ')
+})
 // A service is placed by the Swarm scheduler, which ignores server_id; a container
 // is placed by server_id. The two are never both meaningful, so the form shows one
 // control or the other.
@@ -125,6 +184,10 @@ async function create() {
       builder: !isImage && form.value.build_method !== 'dockerfile' ? form.value.builder.trim() || undefined : undefined,
       registry_id: isImage ? form.value.registry_id : null,
       git_repository_id: !isImage ? form.value.git_repository_id : null,
+      // Only claim a pipeline the probe actually found — the backend re-reads the
+      // repository regardless, but asking for one that isn't there just produces a
+      // warning on the app's timeline.
+      use_pipeline: !isImage && form.value.use_pipeline && inspected.value?.has_pipeline === true,
       stack_id: form.value.stack_id,
       network_ids: form.value.network_ids,
       ports: form.value.ports.filter((p) => p.container_port > 0),
@@ -338,6 +401,61 @@ function formatCreated(ts?: string) {
                   <input v-model="form.builder" class="form-input" placeholder="paketobuildpacks/builder-jammy-base" />
                   <p class="form-hint">Override the Cloud Native Buildpacks builder. Leave empty to use the platform default.</p>
                 </div>
+                <div class="form-group">
+                  <label class="form-label">Repository contents</label>
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="!canInspect || inspecting" @click="inspectRepo">
+                    <span class="mdi" :class="inspecting ? 'mdi-loading mdi-spin' : 'mdi-magnify'"></span>
+                    {{ inspecting ? 'Reading repository…' : 'Check repository' }}
+                  </button>
+                  <p class="form-hint">
+                    Looks for a Dockerfile and a <code>.miabi/pipeline.yaml</code>. Optional — it also verifies the URL and credentials.
+                  </p>
+
+                  <p v-if="inspectError" class="form-hint text-danger">
+                    <span class="mdi mdi-alert-circle-outline"></span> {{ inspectError }}
+                  </p>
+
+                  <div v-else-if="inspected" class="inspect-result">
+                    <!-- Found a usable pipeline: offer to adopt it. -->
+                    <template v-if="inspected.has_pipeline">
+                      <label class="inspect-toggle">
+                        <input v-model="form.use_pipeline" type="checkbox" />
+                        <span>
+                          <strong>Use the pipeline from {{ inspected.pipeline_path }}</strong>
+                          <span class="text-muted"> — runs {{ pipelineTriggerLabel }}</span>
+                        </span>
+                      </label>
+                      <ol class="inspect-steps">
+                        <li v-for="s in inspected.steps" :key="s.name">
+                          <span class="step-name">{{ s.name }}</span>
+                          <span class="text-muted">{{ s.uses ? `built-in: ${s.uses}` : s.image }}</span>
+                          <span v-if="s.continue_on_error" class="badge badge-neutral">continue on error</span>
+                        </li>
+                      </ol>
+                      <p v-if="form.use_pipeline" class="form-hint">
+                        Deploys run these steps instead of building directly. The file in git stays the source of
+                        truth — edit it there and push.
+                      </p>
+                      <p v-else class="form-hint">
+                        The app will build and deploy directly, skipping the steps above.
+                      </p>
+                    </template>
+
+                    <!-- A pipeline file exists but is broken: say so rather than silently building. -->
+                    <p v-else-if="inspected.pipeline_error" class="form-hint text-danger">
+                      <span class="mdi mdi-alert-circle-outline"></span>
+                      Found <code>{{ inspected.pipeline_path }}</code> but it isn't valid: {{ inspected.pipeline_error }}.
+                      The app will build directly until you fix it.
+                    </p>
+
+                    <p v-else class="form-hint">
+                      <span class="mdi mdi-check"></span>
+                      No pipeline file — this app will build
+                      {{ inspected.has_dockerfile ? 'from its Dockerfile' : 'with Cloud Native Buildpacks' }}
+                      and deploy.
+                    </p>
+                  </div>
+                </div>
               </template>
               <div class="form-group">
                 <label class="form-label">Container ports</label>
@@ -396,4 +514,11 @@ function formatCreated(ts?: string) {
 .form-row { display: flex; gap: 12px; margin-bottom: 20px; }
 .port-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
 .form-hint code { background: var(--bg-tertiary); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: var(--text-secondary); }
+.text-danger { color: var(--danger, #dc2626); }
+.inspect-result { margin-top: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-secondary); }
+.inspect-toggle { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.inspect-toggle input { margin-top: 3px; flex-shrink: 0; }
+.inspect-steps { margin: 10px 0 0; padding-left: 20px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.inspect-steps li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.inspect-steps .step-name { font-weight: 600; }
 </style>

@@ -59,6 +59,8 @@ type PipelineHandler struct {
 // value, so the login host and push host stay identical (a mismatch → "denied").
 type RegistryHostResolver interface{ RegistryHost() string }
 
+const builderHandoffTimeout = 10 * time.Minute
+
 // registryHost is the effective host runners use: the live resolved host when
 // available, else the raw env fallback.
 func (h *PipelineHandler) registryHost() string {
@@ -134,18 +136,36 @@ func (h *PipelineHandler) ProcessTask(ctx context.Context, task *asynq.Task) err
 		return h.failRun(run, fmt.Errorf("invalid pipeline spec: %w", perr))
 	}
 
+	// Every build runs on a registered runner — there is no on-node fallback. This
+	// worker may simply not be the process that holds the runner tunnels (a
+	// standalone `miabi worker`), which is a routing problem, not a failure: hand
+	// the run to the control-plane worker instead of killing it. Checked before the
+	// run is marked running, so a handed-off run stays pending.
+	if h.dispatcher == nil {
+		return h.handOffToBuilder(run)
+	}
+
 	now := time.Now()
 	run.Status = models.PipelineRunRunning
 	run.StartedAt = &now
 	_ = h.pipelines.UpdateRun(run)
 	h.publishStatus(run.ID, models.PipelineRunRunning)
 
-	// Every build runs on a registered runner — there is no on-node fallback. When
-	// none can take the run right now, it waits (bounded by runnerWaitTimeout).
-	if h.dispatcher == nil {
-		return h.failRun(run, fmt.Errorf("runner dispatch is not configured on this worker"))
-	}
 	return h.runOnRunner(ctx, run, def)
+}
+
+func (h *PipelineHandler) handOffToBuilder(run *models.PipelineRun) error {
+	if time.Since(run.CreatedAt) > builderHandoffTimeout {
+		return h.failRun(run, fmt.Errorf(
+			"no runner-capable worker picked this run up within %s — check that the control-plane server is running",
+			builderHandoffTimeout))
+	}
+	run.Status = models.PipelineRunPending
+	run.StartedAt = nil
+	_ = h.pipelines.UpdateRun(run)
+	h.log(run.ID, "handing the run off to the runner-capable worker…")
+	h.publishStatus(run.ID, models.PipelineRunPending)
+	return h.producer.EnqueuePipelineRunToBuilder(run.ID, runnerWaitInterval)
 }
 
 // runOnRunner dispatches the run to a runner and drives it to completion. When no
@@ -209,6 +229,7 @@ func (h *PipelineHandler) jobInputs(run *models.PipelineRun, def *models.Pipelin
 	in.Steps = run.Steps
 	in.Registry = reg
 	in.Ref = run.Commit
+	in.Branch = run.Branch
 	if def.ApplicationID != nil {
 		in.AppID = def.ApplicationID
 		if app, err := h.apps.FindByID(*def.ApplicationID); err == nil {

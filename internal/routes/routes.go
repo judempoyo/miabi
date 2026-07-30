@@ -141,6 +141,7 @@ type routerHandlers struct {
 	marketplace    *handlers.MarketplaceHandler
 	registry       *handlers.RegistryHandler
 	gitRepo        *handlers.GitRepositoryHandler
+	gitInspect     *handlers.GitInspectHandler
 	apply          *handlers.ApplyHandler
 	gitops         *handlers.GitOpsHandler
 	pipeline       *handlers.PipelineHandler
@@ -781,6 +782,14 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	gitopsService := gitops.NewService(repositories.NewGitSourceRepository(db), gitRepoRepo, applyService)
 	// CI/CD pipelines: definitions + runs on the internal runner (worker).
 	pipelineService := pipeline.NewService(repositories.NewPipelineRepository(db), producer)
+	// Repository-owned pipelines: adopting a repo's .miabi/pipeline.yaml and
+	// re-reading it before each run needs the app's clone URL and credential.
+	pipelineService.SetGitRepos(gitRepoService)
+	pipelineService.SetApps(appRepo)
+	// …and the app service routes a deploy through that pipeline when one exists.
+	// Wired here rather than at construction because the two services are mutually
+	// dependent: pipelines resolve apps, apps trigger pipelines.
+	appService.SetPipelines(pipelineService)
 	// Built-image catalog: provenance written by pipeline builds; list + GC here.
 	imageService := image.NewService(repositories.NewImageRepository(db), releaseRepo)
 	// Runner job dispatch: sends a build to a runner over its tunnel, mints the
@@ -904,6 +913,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 			marketplace:    handlers.NewMarketplaceHandler(marketplaceService, auditLogger),
 			registry:       handlers.NewRegistryHandler(registryService, auditLogger),
 			gitRepo:        handlers.NewGitRepositoryHandler(gitRepoService, auditLogger),
+			gitInspect:     handlers.NewGitInspectHandler(gitRepoService),
 			apply:          handlers.NewApplyHandler(applyService, auditLogger),
 			gitops:         handlers.NewGitOpsHandler(gitopsService, auditLogger),
 			pipeline:       handlers.NewPipelineHandler(pipelineService, bus, auditLogger),
