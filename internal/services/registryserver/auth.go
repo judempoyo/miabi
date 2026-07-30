@@ -6,8 +6,10 @@ package registryserver
 import (
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -86,6 +88,9 @@ func (s *Service) Authorize(in AuthInput) AuthResult {
 		if err != nil {
 			return AuthResult{Status: http.StatusForbidden, Reason: "unknown workspace namespace"}
 		}
+		if reason := s.authorizeMountSource(in.URI, ws.ID); reason != "" {
+			return AuthResult{Status: http.StatusForbidden, Reason: reason}
+		}
 		return AuthResult{Status: http.StatusOK, Workspace: ws.Name, WorkspaceID: ws.ID, Namespace: Namespace(ws.ID)}
 	}
 
@@ -118,6 +123,9 @@ func (s *Service) Authorize(in AuthInput) AuthResult {
 	if reason := s.authorizePrincipal(key, ws.ID, push); reason != "" {
 		return AuthResult{Status: http.StatusForbidden, Reason: reason}
 	}
+	if reason := s.authorizeMountSource(in.URI, ws.ID); reason != "" {
+		return AuthResult{Status: http.StatusForbidden, Reason: reason}
+	}
 	// Soft per-workspace storage quota (push only; non-blocking, cached).
 	if push && s.quotaExceeded(ws.ID) {
 		return AuthResult{Status: http.StatusForbidden, Reason: "workspace registry storage quota exceeded"}
@@ -129,6 +137,54 @@ func (s *Service) Authorize(in AuthInput) AuthResult {
 		UserID:      key.UserID,
 		Namespace:   Namespace(ws.ID),
 	}
+}
+
+// authorizeMountSource authorizes the source repository of a cross-repository
+// blob mount against the target workspace, returning "" when it is allowed.
+//
+// A push may start an upload as POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repo>,
+// which copies an existing blob out of <repo> instead of re-uploading it. That
+// source repository travels in the QUERY STRING, which neither parseRepo nor the
+// gateway's namespace rewrite (a path regex) touches — so without this check a
+// member of one workspace could push to their own namespace while lifting layers
+// out of another tenant's, using nothing but a digest.
+//
+// Mounting within the workspace is the legitimate case (it is what makes a
+// retag cheap), so the rule is simply that source and target namespaces match.
+// It applies to the platform principal too: a build only ever mounts inside the
+// namespace it is pushing to.
+func (s *Service) authorizeMountSource(uri string, workspaceID uint) string {
+	from := mountSource(uri)
+	if from == "" {
+		return ""
+	}
+	src, err := s.resolveNamespace(firstSegment(from))
+	if err != nil {
+		return "unknown blob mount source namespace"
+	}
+	if src.ID != workspaceID {
+		return "cross-workspace blob mount is not permitted"
+	}
+	return ""
+}
+
+// mountSource extracts the "from" repository of a cross-repository blob mount
+// from a request URI, or "" when the request is not one.
+func mountSource(uri string) string {
+	i := strings.IndexByte(uri, '?')
+	if i < 0 {
+		return ""
+	}
+	q, err := url.ParseQuery(uri[i+1:])
+	if err != nil {
+		// An unparseable query on an upload could still carry a mount the registry
+		// itself parses more leniently. Naming a source we can't read is refused.
+		if strings.Contains(uri[i+1:], "from=") {
+			return "\x00" // never resolves to a namespace → denied
+		}
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(q.Get("from")), "/")
 }
 
 // authorizePrincipal returns "" when the token may perform the action on the
@@ -179,7 +235,12 @@ func roleAllows(role models.WorkspaceRole, push bool) bool {
 
 // resolveNamespace resolves the repository namespace segment to a workspace —
 // either the rewritten id form "ws_<id>" or the workspace name.
+// Without a workspace finder wired, no namespace can be proven to belong to
+// anyone — every caller of this treats that as a denial rather than a pass.
 func (s *Service) resolveNamespace(ns string) (*models.Workspace, error) {
+	if s.ws == nil {
+		return nil, errors.New("registry: no workspace finder is configured")
+	}
 	if id, ok := parseIDNamespace(ns); ok {
 		return s.ws.FindByID(id)
 	}

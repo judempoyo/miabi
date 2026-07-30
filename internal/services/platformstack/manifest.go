@@ -148,12 +148,16 @@ type Gateway struct {
 
 // Registry configures the built-in OCI registry.
 //
-// Only written into the control plane's environment when Enabled. That is not a
-// stylistic choice: a non-empty MIABI_REGISTRY_* value is a ONE-WAY OVERRIDE — it
-// pins the setting and the admin UI can no longer change it. Leaving the keys absent
-// is what keeps the registry a UI-managed setting, which is the right default for an
-// operator who has not asked for it. examples/compose/compose.yaml and install.sh take exactly
-// the same position.
+// This manifest is the ONLY place these two live: whether the registry runs and
+// what hostname it answers on are environment-only settings the admin UI shows
+// read-only, because the host is what every stored image reference is anchored
+// to and what decides which workspace owns an image. Changing either means
+// editing the manifest (or MIABI_REGISTRY_ENABLED / MIABI_REGISTRY_HOST directly)
+// and restarting the control plane. examples/compose/compose.yaml and install.sh
+// take exactly the same position.
+//
+// The keys are still only written when Enabled, since an absent
+// MIABI_REGISTRY_ENABLED already reads as false.
 type Registry struct {
 	Enabled bool `yaml:"enabled"`
 	// Host is the registry's own public hostname (registry.example.com). It gets a

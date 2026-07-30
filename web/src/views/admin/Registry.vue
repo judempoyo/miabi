@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { registryApi, type RegistrySettingsPayload } from '@/api/registry'
 import { useNotificationStore } from '@/stores/notification'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -15,9 +15,27 @@ const s3Entitled = ref(false)
 
 const volumeName = ref('mb-registry-data')
 
+// Enablement and the hostname are fixed at boot from MIABI_REGISTRY_ENABLED /
+// MIABI_REGISTRY_HOST. They are shown, never edited: the host is what every
+// stored image reference is anchored to and what decides which workspace owns an
+// image, so moving it under a running platform would strand those references.
+const enabled = ref(false)
+const hostSource = ref<'env' | 'stored' | 'base_domain' | 'unset'>('unset')
+
+const hostOrigin = computed(() => {
+  switch (hostSource.value) {
+    case 'env':
+      return 'Set by MIABI_REGISTRY_HOST.'
+    case 'base_domain':
+      return 'Derived from the external base domain (registry.<domain>).'
+    case 'stored':
+      return 'A value saved before the host became environment-only. Set MIABI_REGISTRY_HOST to move it.'
+    default:
+      return 'No usable hostname — set MIABI_REGISTRY_HOST or an external base domain.'
+  }
+})
+
 const form = ref<RegistrySettingsPayload>({
-  enabled: false,
-  host: '',
   storage_type: 'filesystem',
   s3_endpoint: '',
   s3_bucket: '',
@@ -37,9 +55,9 @@ async function load() {
     secretSet.value = s.s3_secret_set
     s3Entitled.value = s.s3_entitled
     volumeName.value = s.volume_name || 'mb-registry-data'
+    enabled.value = s.enabled
+    hostSource.value = s.host_source
     form.value = {
-      enabled: s.enabled,
-      host: s.host ?? '',
       storage_type: s.storage_type,
       s3_endpoint: s.s3_endpoint ?? '',
       s3_bucket: s.s3_bucket ?? '',
@@ -62,7 +80,7 @@ async function save() {
     notify.error('S3/MinIO storage requires an Enterprise license. Use local storage or upgrade.')
     return
   }
-  if (form.value.enabled && form.value.storage_type === 's3' && !form.value.s3_bucket.trim()) {
+  if (form.value.storage_type === 's3' && !form.value.s3_bucket.trim()) {
     notify.error('An S3 bucket is required for the S3 storage driver')
     return
   }
@@ -70,6 +88,7 @@ async function save() {
   try {
     const s = (await registryApi.updateSettings(form.value)).data.data
     effectiveHost.value = s.effective_host
+    hostSource.value = s.host_source
     secretSet.value = s.s3_secret_set
     form.value.s3_secret_key = ''
     notify.success('Registry settings saved')
@@ -116,15 +135,23 @@ onMounted(load)
         </div>
       </div>
       <div class="card-body">
-        <label class="toggle-row">
-          <input v-model="form.enabled" type="checkbox" />
+        <label class="toggle-row is-locked">
+          <input :checked="enabled" type="checkbox" disabled />
           <span>Enable the registry (runs the container and seeds its gateway route)</span>
         </label>
+        <small class="form-hint">
+          Set by <code>MIABI_REGISTRY_ENABLED={{ enabled ? 'true' : 'false' }}</code>. Fixed by the platform —
+          change it and restart Miabi.
+        </small>
 
         <div class="form-group" style="margin-top: 16px">
           <label class="form-label">Host</label>
-          <input v-model="form.host" class="form-input mono" :placeholder="'registry.&lt;your-domain&gt;'" style="max-width: 420px" />
-          <small class="form-hint">Public hostname for docker login. Defaults to <code>registry.&lt;external-base-domain&gt;</code> when blank.</small>
+          <input :value="effectiveHost" class="form-input mono" placeholder="—" style="max-width: 420px" disabled />
+          <small class="form-hint">
+            Public hostname for docker login. {{ hostOrigin }} Fixed by the platform: every image reference
+            Miabi stores is anchored to this hostname, and matching against it is how a workspace's own
+            images are told apart from another's — so it cannot move while apps are running.
+          </small>
         </div>
 
         <div class="form-group">
@@ -198,7 +225,7 @@ onMounted(load)
             {{ saving ? 'Saving…' : 'Save settings' }}
           </button>
           <button
-            v-if="form.enabled && form.delete_enabled"
+            v-if="enabled && form.delete_enabled"
             class="btn btn-secondary"
             :disabled="runningGc"
             @click="showGcConfirm = true"
@@ -229,6 +256,8 @@ onMounted(load)
 .s3-fields { border: 0; padding: 0; margin: 0 0 8px; min-width: 0; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
 .form-hint { display: block; font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+/* A locked toggle is not clickable, so it must not present as one. */
+.toggle-row.is-locked { cursor: default; color: var(--text-muted); }
 .text-muted { color: var(--text-muted); }
 .text-sm { font-size: 13px; }
 .mono { font-family: monospace; }

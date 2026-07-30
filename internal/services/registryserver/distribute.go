@@ -6,7 +6,6 @@ package registryserver
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/miabi-io/miabi/internal/docker"
 )
@@ -72,12 +71,15 @@ func (s *Service) RegistryHost() string {
 }
 
 // BuildRef is the registry reference a built image is distributed under:
-// <host>/<workspace-name>/<app-name>:<deploymentID>. Both path segments use the
-// human-readable, per-workspace-unique handles a user pushes to (Connect tab), so
-// a runner build authenticates and pushes exactly like a user — the gateway
-// rewrites the workspace name to the immutable ws_<id> for storage. The workspace
-// namespace falls back to the ws_<id> form when the name can't be resolved (no
-// workspace finder wired), which still works through the same rewrite.
+// <host>/ws_<id>/<app-name>:<deploymentID>.
+//
+// The namespace is the immutable ws_<id> form rather than the workspace name a
+// user types, even though the gateway accepts both (it rewrites a name to the id
+// before storage, and Authorize resolves either). The reference is recorded on
+// the deployment and pulled again much later — on another node, or on a rollback
+// months afterwards — and a workspace rename in between would leave a name-form
+// reference pointing at a namespace that no longer resolves, or, worse, at
+// whichever workspace has since claimed that name.
 func (s *Service) BuildRef(workspaceID uint, appName string, deploymentID uint) string {
 	st, err := s.Get()
 	if err != nil {
@@ -87,30 +89,13 @@ func (s *Service) BuildRef(workspaceID uint, appName string, deploymentID uint) 
 	if host == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s/%s:%d", host, s.namespaceSegment(workspaceID), appName, deploymentID)
-}
-
-// namespaceSegment is the repository's first path segment for a workspace: its
-// name when resolvable (matching user pushes), else the ws_<id> id form.
-func (s *Service) namespaceSegment(workspaceID uint) string {
-	if s.ws != nil {
-		if w, err := s.ws.FindByID(workspaceID); err == nil && w.Name != "" {
-			return w.Name
-		}
-	}
-	return Namespace(workspaceID)
+	return fmt.Sprintf("%s/%s/%s:%d", host, Namespace(workspaceID), appName, deploymentID)
 }
 
 // IsBuildRef reports whether ref is one of this registry's distributed image
-// refs (i.e. it lives under the registry host), so the deploy path knows to pull
-// it from the internal registry rather than rebuild.
+// refs
 func (s *Service) IsBuildRef(ref string) bool {
-	st, err := s.Get()
-	if err != nil {
-		return false
-	}
-	host := s.HostFor(st)
-	return host != "" && strings.HasPrefix(ref, host+"/")
+	return s.IsInternalRef(ref)
 }
 
 // PushAuth is the credential the worker uses to push/pull built images (the

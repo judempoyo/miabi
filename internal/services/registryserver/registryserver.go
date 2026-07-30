@@ -118,21 +118,32 @@ func NewService(
 // Get returns the current settings (an empty, disabled default when unset),
 // never exposing the S3 secret — only the S3SecretSet presence flag.
 func (s *Service) Get() (*models.RegistrySettings, error) {
-	st, err := s.repo.Get()
+	var st *models.RegistrySettings
+	var err error
+	if s.repo != nil {
+		st, err = s.repo.Get()
+	} else {
+		// No settings store wired. Enablement and the host come from the
+		// environment regardless, so the service can still answer the questions the
+		// deploy path asks of it (is this ref ours, whose namespace is it).
+		err = gorm.ErrRecordNotFound
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		st = &models.RegistrySettings{StorageType: models.RegistryStorageFilesystem, VolumeName: models.DefaultRegistryVolume}
 	} else if err != nil {
 		return nil, err
 	}
-	s.applyEnvOverrides(st)
+	s.applyEnvConfig(st)
 	st.S3SecretSet = st.S3SecretKeyEnc != ""
 	return st, nil
 }
 
 // SaveInput carries an update. S3SecretKey is nil/empty to keep the stored secret.
+//
+// Enabled and Host are deliberately absent: both are boot-time, environment-only
+// settings (see applyEnvConfig). Accepting them here would give the admin API a
+// way to move the registry's identity at runtime.
 type SaveInput struct {
-	Enabled             bool
-	Host                string
 	StorageType         string
 	S3Endpoint          string
 	S3Bucket            string
@@ -154,8 +165,10 @@ func (s *Service) Save(in SaveInput) (*models.RegistrySettings, error) {
 		return nil, err
 	}
 
-	st.Enabled = in.Enabled
-	st.Host = strings.TrimSpace(in.Host)
+	st.Enabled = s.cfg.Enabled
+	if host := s.envHost(); host != "" {
+		st.Host = host
+	}
 	st.StorageType = normalizeStorage(in.StorageType)
 	// The data volume is a fixed platform name, not admin-configurable.
 	st.VolumeName = models.DefaultRegistryVolume
@@ -190,18 +203,45 @@ func normalizeStorage(t string) string {
 	return models.RegistryStorageFilesystem
 }
 
-// applyEnvOverrides layers boot-authoritative env config over stored settings,
-// mirroring the ExternalBaseDomain convention: a set env field wins on boot.
-func (s *Service) applyEnvOverrides(st *models.RegistrySettings) {
+// envHost is the validated MIABI_REGISTRY_HOST, or "" when unset or malformed.
+// A malformed host is dropped rather than used: it is the string every image
+// reference is matched against, and a value that matches nothing would leave the
+// tenant check silently inert while the registry still served traffic. Boot
+// refuses such a value outright (config.validate), so reaching here means the
+// process was started before the check existed.
+func (s *Service) envHost() string {
+	host, err := NormalizeHost(s.cfg.Host)
+	if err != nil {
+		logger.Error("registry: ignoring invalid MIABI_REGISTRY_HOST", "error", err)
+		return ""
+	}
+	return host
+}
+
+// applyEnvConfig layers the boot environment over the stored settings.
+//
+// Enablement and the hostname are UNCONDITIONALLY environment-derived — the
+// stored values are not consulted at all. They define whether the registry
+// exists and what name every image reference is anchored to, which is not a
+// thing that may change under a running platform: the gateway route, its TLS
+// certificate, the references recorded on past deployments, and the namespace
+// check at pull time all key off the host. Changing either takes an env change
+// and a restart, so that every process in the install agrees on the answer.
+//
+// The remaining fields keep the one-way-override convention: a set env value
+// pins the setting, an unset one leaves the admin UI in charge.
+func (s *Service) applyEnvConfig(st *models.RegistrySettings) {
 	c := s.cfg
+	st.Enabled = c.Enabled
+	// An unset MIABI_REGISTRY_HOST leaves the stored value in place rather than
+	// blanking it: an install upgraded from when the field was UI-editable must
+	// keep answering on the name its existing images already reference. HostFor
+	// still validates it, and nothing can write a new one.
+	if host := s.envHost(); host != "" {
+		st.Host = host
+	}
 	if !c.IsSet() {
 		return
-	}
-	if c.Enabled {
-		st.Enabled = true
-	}
-	if c.Host != "" {
-		st.Host = c.Host
 	}
 	if c.StorageType != "" {
 		st.StorageType = normalizeStorage(c.StorageType)
@@ -228,16 +268,51 @@ func (s *Service) applyEnvOverrides(st *models.RegistrySettings) {
 	}
 }
 
-// HostFor returns the effective registry hostname: the configured host, else
+// HostFor returns the effective registry hostname: MIABI_REGISTRY_HOST, else
 // registry.<external-base-domain>, else empty (registry can't be served).
+//
+// Both candidates are validated. An unusable host resolves to "" — distribution
+// then reports itself unavailable with a specific reason and no gateway route is
+// written — rather than to a string that would silently fail to match any image
+// reference.
 func (s *Service) HostFor(st *models.RegistrySettings) string {
-	if st.Host != "" {
-		return st.Host
+	if host := s.envHost(); host != "" {
+		return host
 	}
-	if base := strings.TrimSpace(s.settings.String(settings.KeyExternalBaseDomain, "")); base != "" {
-		return "registry." + base
+	// A legacy value stored back when the host was UI-editable. Still honored so an
+	// upgraded install keeps serving on the name its images already reference, but
+	// it is no longer writable — the admin API and UI treat the host as read-only.
+	if host, err := NormalizeHost(st.Host); err == nil && host != "" {
+		return host
 	}
-	return ""
+	if s.settings == nil {
+		return ""
+	}
+	base := strings.TrimSpace(s.settings.String(settings.KeyExternalBaseDomain, ""))
+	if base == "" {
+		return ""
+	}
+	host, err := NormalizeHost("registry." + base)
+	if err != nil {
+		logger.Error("registry: external base domain does not yield a usable registry host", "base_domain", base, "error", err)
+		return ""
+	}
+	return host
+}
+
+// HostSource names where the effective host came from, for the admin UI's
+// read-only explanation of why the field cannot be edited.
+func (s *Service) HostSource(st *models.RegistrySettings) string {
+	if s.envHost() != "" {
+		return "env"
+	}
+	if stored, err := NormalizeHost(st.Host); err == nil && stored != "" {
+		return "stored"
+	}
+	if s.HostFor(st) != "" {
+		return "base_domain"
+	}
+	return "unset"
 }
 
 // image resolves the registry image (env override → catalog → registry:3).
@@ -305,7 +380,14 @@ func (s *Service) Ensure(ctx context.Context, dc docker.Client) error {
 		return err
 	}
 	if !st.Enabled {
+		s.warnIfDisabledByLock()
 		return s.Teardown(ctx, dc)
+	}
+	if s.HostFor(st) == "" {
+		// The container can run, but nothing can reach it: the gateway route below
+		// is what terminates TLS and enforces forwardAuth, and it needs a hostname.
+		// Say so plainly — otherwise the only symptom is pulls failing on nodes.
+		logger.Error("internal registry is enabled but has no usable hostname — set MIABI_REGISTRY_HOST or an external base domain and restart; no gateway route will be published")
 	}
 	if err := s.startContainer(ctx, dc, st, false); err != nil {
 		return err
@@ -319,6 +401,24 @@ func (s *Service) Ensure(ctx context.Context, dc docker.Client) error {
 	}
 	logger.Info("internal registry ready", "image", s.image(), "storage", st.StorageType, "host", s.HostFor(st))
 	return nil
+}
+
+// warnIfDisabledByLock reports an install that had the registry switched on from
+// the admin UI before enablement became environment-only. Tearing it down on the
+// first boot after the upgrade is correct — the environment is now the only
+// answer — but silently is not: git-source deploys stop working, and nothing on
+// the settings page would explain why. Say exactly what to set.
+func (s *Service) warnIfDisabledByLock() {
+	if s.cfg.Enabled || s.repo == nil {
+		return
+	}
+	stored, err := s.repo.Get()
+	if err != nil || stored == nil || !stored.Enabled {
+		return
+	}
+	logger.Error("internal registry was enabled in the database but MIABI_REGISTRY_ENABLED is not set — " +
+		"enablement and the registry hostname are now environment-only and take a restart to change. " +
+		"The registry has been torn down; set MIABI_REGISTRY_ENABLED=true (and MIABI_REGISTRY_HOST, if you had a custom host) and restart Miabi to bring it back.")
 }
 
 // volumeMounts is the registry's data-volume mount (filesystem driver only). The

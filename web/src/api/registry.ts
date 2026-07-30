@@ -19,11 +19,19 @@ export interface RegistrySettings {
   effective_host: string
   /** Whether S3/MinIO storage is licensed (Enterprise); local storage is free. */
   s3_entitled: boolean
+  /**
+   * `enabled` and `host` are read-only: they come from MIABI_REGISTRY_ENABLED /
+   * MIABI_REGISTRY_HOST and take a restart to change. Always true — the flag
+   * exists so the UI explains the fixed fields rather than offering inputs the
+   * server discards.
+   */
+  host_locked: boolean
+  /** Where the effective host came from. */
+  host_source: 'env' | 'stored' | 'base_domain' | 'unset'
 }
 
+/** Note the absence of `enabled` and `host` — see RegistrySettings.host_locked. */
 export interface RegistrySettingsPayload {
-  enabled: boolean
-  host: string
   storage_type: 'filesystem' | 's3'
   s3_endpoint: string
   s3_bucket: string

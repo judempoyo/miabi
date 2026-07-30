@@ -233,10 +233,15 @@ func runWorker() error {
 	)
 	// Distribute Git-built images via the internal registry (no-op unless enabled
 	// + a platform token is configured), so other nodes can pull them.
+	// The workspace repository is not optional here: resolving an image
+	// reference's namespace to a workspace is how the deploy path proves an
+	// internal-registry image belongs to the app pulling it. Without it every such
+	// reference is refused (the check fails closed), so a standalone worker would
+	// deploy nothing built by a runner.
 	deployHandler.SetDistributor(registryserver.NewService(
 		repositories.NewRegistrySettingsRepository(db), imageResolver,
 		settings.NewProvider(repositories.NewSettingRepository(db), nil),
-		nil, nil, nil, cfg.ProxyNetwork, cfg.ControlURL, cfg.Registry,
+		nil, repositories.NewWorkspaceRepository(db), nil, cfg.ProxyNetwork, cfg.ControlURL, cfg.Registry,
 	))
 
 	volumeBackupSvc := volumebackup.NewService(repositories.NewVolumeBackupRepository(db), repositories.NewVolumeRepository(db), nodeClients)

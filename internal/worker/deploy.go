@@ -142,7 +142,13 @@ type Distributor interface {
 	// so the registry mirrors the release number. Best-effort.
 	TagReleaseVersion(ctx context.Context, workspaceID uint, appName, digest string, version int) error
 	// IsBuildRef reports whether ref is one of this registry's distributed refs.
+	// It answers "whose registry", never "whose image" — see ResolveImageRef.
 	IsBuildRef(ref string) bool
+	// ResolveImageRef authorizes an image reference for a workspace and returns
+	// the reference to actually pull. A reference outside the internal registry
+	// passes through untouched; one inside it must live in the workspace's own
+	// namespace, and comes back rewritten to the immutable ws_<id> form.
+	ResolveImageRef(workspaceID uint, ref string) (string, error)
 	// PushAuth is the credential to push/pull distributed images.
 	PushAuth() *docker.RegistryAuth
 }
@@ -283,6 +289,21 @@ func (h *DeployHandler) run(ctx context.Context, app *models.Application, dep *m
 		h.log(dep, fmt.Sprintf("deployment started — %s strategy", dep.Strategy))
 	}
 
+	// Before anything looks at the image: if it addresses the built-in registry,
+	// prove this workspace owns the namespace it names. Everything below that
+	// touches an internal ref pulls it with the platform credential, which is
+	// authorized for EVERY namespace — so an unchecked ref lets a workspace name
+	// another tenant's image and have the node fetch it, bypassing the per-request
+	// authorization the registry gateway does for `docker pull`.
+	if ref, err := h.authorizedImageRef(app, dep.Image); err != nil {
+		_ = h.fail(dep, err)
+		return
+	} else if ref != dep.Image {
+		// Canonicalized to ws_<id>, which survives a workspace rename.
+		dep.Image = ref
+		_ = h.deployments.Update(dep)
+	}
+
 	var image string
 	// buildMethod is the resolved git build method (set by the git case below);
 	// it stays empty for image/prebuilt apps. Buildpack images run via the CNB
@@ -356,7 +377,14 @@ func (h *DeployHandler) run(ctx context.Context, app *models.Application, dep *m
 	default:
 		image = dep.Image
 		if image == "" {
-			image = app.ImageRef("")
+			// Falling back to the app's own image, which the pre-flight above never
+			// saw (it checked dep.Image) — authorize it on the same terms.
+			ref, err := h.authorizedImageRef(app, app.ImageRef(""))
+			if err != nil {
+				_ = h.fail(dep, err)
+				return
+			}
+			image = ref
 		}
 		dep.Image = image
 		auth, err := h.resolveRegistryAuth(app, dep)
@@ -1186,6 +1214,36 @@ func stackLabels(app *models.Application, base map[string]string) map[string]str
 	base["com.docker.compose.service"] = app.Name
 	base[docker.LabelStack] = fmt.Sprintf("%d", app.Stack.ID)
 	return base
+}
+
+// ErrForeignImage is the deploy-time refusal for an image the app's workspace
+// may not pull from the built-in registry. It wraps the specific reason.
+var ErrForeignImage = errors.New("image is not available to this workspace")
+
+// authorizedImageRef checks a reference against the app's workspace and returns
+// the reference to actually use.
+//
+// Only references into the built-in registry are constrained; anything else
+// (Docker Hub, GHCR, a private registry the workspace holds a credential for)
+// passes straight through. The constraint exists because a built-in-registry
+// pull authenticates with the platform token, which every workspace namespace
+// accepts by design — it is how a runner build pushes on any tenant's behalf.
+// That makes the reference itself the only thing standing between a workspace
+// and every other tenant's images, so it is checked here rather than trusted
+// from whatever wrote it (an app's image field, a rollback's recorded ref, a
+// pipeline deploy-by-digest).
+//
+// With no distributor wired there is no internal registry to cross into, so the
+// reference is returned as-is.
+func (h *DeployHandler) authorizedImageRef(app *models.Application, ref string) (string, error) {
+	if h.distributor == nil || ref == "" {
+		return ref, nil
+	}
+	resolved, err := h.distributor.ResolveImageRef(app.WorkspaceID, ref)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrForeignImage, err)
+	}
+	return resolved, nil
 }
 
 // imagePresent reports whether ref is already on the app's node. Errors (e.g. a

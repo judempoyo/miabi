@@ -170,11 +170,12 @@ func controlPlaneSpec(m *Manifest, name, image string) docker.RunSpec {
 	if m.DockerGID != "" {
 		spec.GroupAdd = []string{m.DockerGID}
 	}
-	// The built-in OCI registry. Written ONLY when enabled: any non-empty
-	// MIABI_REGISTRY_* value is a one-way override that pins the setting out of the
-	// admin UI's reach. Emitting `MIABI_REGISTRY_ENABLED=false` would therefore not
-	// mean "off, change it in the UI" — it would mean "off, and you may never turn it
-	// on from the UI". Absent is the only way to say "the UI decides".
+	// The built-in OCI registry. Enablement and the hostname are environment-only
+	// by design — the admin UI renders them read-only — so the manifest is where an
+	// operator changes them, and the control plane has to restart to pick the change
+	// up. Written only when enabled, since an absent MIABI_REGISTRY_ENABLED already
+	// reads as false; the other MIABI_REGISTRY_* keys keep the one-way-override rule
+	// (set here pins the setting, absent leaves the UI in charge).
 	//
 	// MIABI_REGISTRY_AUTH_URL needs no value here: its default is http://miabi:9000,
 	// which is exactly the control plane's container name on the shared network.

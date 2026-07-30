@@ -54,10 +54,14 @@ func (h *AdminRegistryHandler) RunGC(c *okapi.Context) error {
 
 // UpdateRegistrySettingsRequest is the body for updating the registry settings.
 // S3SecretKey is empty to keep the stored secret unchanged.
+//
+// Enablement and the hostname are not in this body. They are fixed at boot from
+// MIABI_REGISTRY_ENABLED / MIABI_REGISTRY_HOST and take a restart to change:
+// they determine whether the registry exists and what name every image reference
+// on the platform is anchored to, so they must not be movable by an API call
+// while deployments hold references to the old value.
 type UpdateRegistrySettingsRequest struct {
 	Body struct {
-		Enabled             bool   `json:"enabled"`
-		Host                string `json:"host"`
 		StorageType         string `json:"storage_type" enum:"filesystem,s3"`
 		S3Endpoint          string `json:"s3_endpoint"`
 		S3Bucket            string `json:"s3_bucket"`
@@ -76,6 +80,15 @@ type RegistrySettingsView struct {
 	*models.RegistrySettings
 	EffectiveHost string `json:"effective_host"`
 	S3Entitled    bool   `json:"s3_entitled"`
+	// HostLocked reports that enablement and the hostname are read-only here:
+	// they come from MIABI_REGISTRY_ENABLED / MIABI_REGISTRY_HOST and take a
+	// restart to change. Always true — it exists so the UI can render the two
+	// fields as fixed and explain why, rather than offering inputs whose values
+	// the server discards.
+	HostLocked bool `json:"host_locked"`
+	// HostSource is where the effective host came from: "env", "stored" (a legacy
+	// value saved while the field was editable), "base_domain", or "unset".
+	HostSource string `json:"host_source"`
 }
 
 func (h *AdminRegistryHandler) view(st *models.RegistrySettings) RegistrySettingsView {
@@ -83,6 +96,8 @@ func (h *AdminRegistryHandler) view(st *models.RegistrySettings) RegistrySetting
 		RegistrySettings: st,
 		EffectiveHost:    h.svc.HostFor(st),
 		S3Entitled:       h.ee.Has(enterprise.FlagRegistryS3),
+		HostLocked:       true,
+		HostSource:       h.svc.HostSource(st),
 	}
 }
 
@@ -104,7 +119,7 @@ func (h *AdminRegistryHandler) UpdateSettings(c *okapi.Context, req *UpdateRegis
 			return entitlementAbort(c, err)
 		}
 	}
-	if b.Enabled && b.StorageType == models.RegistryStorageS3 && b.S3Bucket == "" {
+	if b.StorageType == models.RegistryStorageS3 && b.S3Bucket == "" {
 		return c.AbortBadRequest("an S3 bucket is required for the S3 storage driver")
 	}
 	var secret *string
@@ -112,8 +127,6 @@ func (h *AdminRegistryHandler) UpdateSettings(c *okapi.Context, req *UpdateRegis
 		secret = &b.S3SecretKey
 	}
 	st, err := h.svc.Save(registryserver.SaveInput{
-		Enabled:             b.Enabled,
-		Host:                b.Host,
 		StorageType:         b.StorageType,
 		S3Endpoint:          b.S3Endpoint,
 		S3Bucket:            b.S3Bucket,

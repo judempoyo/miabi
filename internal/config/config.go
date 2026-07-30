@@ -4,9 +4,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -410,6 +412,62 @@ func (r RegistryConfig) IsSet() bool {
 		r.S3AccessKey != "" || r.S3SecretKey != ""
 }
 
+// registryHostPattern matches a DNS hostname with an optional port. It is
+// deliberately lowercase-only: Docker lowercases the host of every image
+// reference, so a host that only matched after case folding would fail the
+// literal prefix comparison the ownership check makes on each reference.
+var registryHostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]{1,5})?$`)
+
+// ErrRegistryHostInvalid is returned when a registry hostname is not usable.
+// The message names no variable: the same rule applies to a host derived from
+// the external base domain, which is not MIABI_REGISTRY_HOST's fault.
+var ErrRegistryHostInvalid = errors.New("invalid registry host")
+
+// NormalizeRegistryHost validates a registry hostname and returns its canonical
+// form. An empty input is not an error — it means "unset", and the caller falls
+// back to registry.<external-base-domain>.
+//
+// The host is validated rather than trusted because it is a security boundary:
+// deciding whether an image reference belongs to the built-in registry (and so
+// which workspace's namespace it must live in) is a prefix match against this
+// string. A host carrying a scheme, a path, or a wildcard matches no reference
+// at all, which would leave the ownership check inert while the registry kept
+// serving traffic.
+func NormalizeRegistryHost(raw string) (string, error) {
+	h := strings.ToLower(strings.TrimSpace(raw))
+	if h == "" {
+		return "", nil
+	}
+	if strings.Contains(h, "://") {
+		return "", fmt.Errorf("%w %q: drop the scheme, a registry host is a bare hostname (registry.example.com)", ErrRegistryHostInvalid, raw)
+	}
+	if strings.ContainsAny(h, "/?#") {
+		return "", fmt.Errorf("%w %q: a registry host carries no path", ErrRegistryHostInvalid, raw)
+	}
+	if !registryHostPattern.MatchString(h) {
+		return "", fmt.Errorf("%w %q: expected a DNS hostname with an optional port (registry.example.com[:5000])", ErrRegistryHostInvalid, raw)
+	}
+	// A single-label host with no port ("registry") is indistinguishable from a
+	// Docker Hub namespace: `docker pull registry/acme/web` goes to Docker Hub,
+	// not here. Requiring a dot, a port, or localhost keeps every reference the
+	// platform builds unambiguously ours.
+	if !strings.ContainsAny(h, ".:") && !strings.HasPrefix(h, "localhost") {
+		return "", fmt.Errorf("%w %q: use a dotted hostname or add a port — Docker reads a single-label host as a Docker Hub namespace", ErrRegistryHostInvalid, raw)
+	}
+	return h, nil
+}
+
+// validateRegistry refuses to boot on an unusable MIABI_REGISTRY_HOST. It runs in
+// dev too: an install that comes up with a host nothing matches looks healthy —
+// the registry serves, pushes succeed — right up to the point where the
+// workspace-ownership check on a pull silently has nothing to compare against.
+func (c *Config) validateRegistry() error {
+	if _, err := NormalizeRegistryHost(c.Registry.Host); err != nil {
+		return fmt.Errorf("MIABI_REGISTRY_HOST: %w", err)
+	}
+	return nil
+}
+
 // New loads configuration from the environment (and an optional .env file).
 func New() *Config {
 	if err := godotenv.Load(); err != nil {
@@ -547,6 +605,13 @@ func (c *Config) validate() error {
 	// Network pool sanity always runs (dev included) so a misconfiguration fails
 	// fast at boot rather than at the first network create.
 	if err := c.validateNetworkPool(); err != nil {
+		return err
+	}
+	// The registry host likewise always runs: it is the string every internal
+	// image reference is matched against to decide which workspace owns an image,
+	// and the registry's identity cannot be changed later without a restart. A
+	// value that matches nothing must not boot.
+	if err := c.validateRegistry(); err != nil {
 		return err
 	}
 	if c.Env == "dev" {
