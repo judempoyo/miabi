@@ -4,12 +4,17 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jkaninda/okapi"
 	"github.com/miabi-io/miabi/internal/middlewares"
 	"github.com/miabi-io/miabi/internal/services/audit"
 	"github.com/miabi-io/miabi/internal/services/backupsettings"
+	"github.com/miabi-io/miabi/internal/wsbundle"
 )
 
 // WorkspaceBackupSettingsHandler exposes a workspace's shared S3 backup target.
@@ -37,6 +42,9 @@ type UpdateBackupSettingsRequest struct {
 
 		DatabaseBackupPath string `json:"database_backup_path"`
 		VolumeBackupPath   string `json:"volume_backup_path"`
+
+		BundlePath       string `json:"bundle_path"`
+		BundlePassphrase string `json:"bundle_passphrase"`
 	} `json:"body"`
 }
 
@@ -60,6 +68,10 @@ func (h *WorkspaceBackupSettingsHandler) Update(c *okapi.Context, req *UpdateBac
 	if b.S3SecretKey != "" {
 		secret = &b.S3SecretKey
 	}
+	var passphrase *string
+	if b.BundlePassphrase != "" {
+		passphrase = &b.BundlePassphrase
+	}
 	st, err := h.svc.Save(wsID, backupsettings.SaveInput{
 		S3Enabled:          b.S3Enabled,
 		S3Endpoint:         b.S3Endpoint,
@@ -71,37 +83,99 @@ func (h *WorkspaceBackupSettingsHandler) Update(c *okapi.Context, req *UpdateBac
 		S3ForcePathStyle:   b.S3ForcePathStyle,
 		DatabaseBackupPath: b.DatabaseBackupPath,
 		VolumeBackupPath:   b.VolumeBackupPath,
+		BundlePath:         b.BundlePath,
+		BundlePassphrase:   passphrase,
 	})
 	if err != nil {
+		// A rejected passphrase is the user's to fix, not an internal failure.
+		if errors.Is(err, wsbundle.ErrWeakPassphrase) {
+			return c.AbortBadRequest(err.Error())
+		}
 		return c.AbortInternalServerError("failed to save backup settings", err)
 	}
 	h.record(c, wsID, "backup.settings_update")
 	return ok(c, st)
 }
 
-// Test validates the supplied (or stored) S3 settings. This is a structural
-// check that the configuration is complete; a live bucket probe runs on the
-// first backup via the one-shot backup tool.
+// Test proves the supplied (or stored) S3 target works, by using it: under every
+// prefix this workspace writes to, it puts a small object, reads it back and
+// removes it.
 func (h *WorkspaceBackupSettingsHandler) Test(c *okapi.Context, req *UpdateBackupSettingsRequest) error {
 	wsID := middlewares.WorkspaceID(c)
 	b := req.Body
-	if b.S3Bucket == "" {
-		return c.AbortBadRequest("an S3 bucket is required")
+	var secret *string
+	if b.S3SecretKey != "" {
+		secret = &b.S3SecretKey
 	}
-	if b.S3AccessKey == "" {
-		return c.AbortBadRequest("an access key is required")
+	// Bounded: a wrong endpoint should answer in seconds. The blob client's own
+	// timeout is sized for uploading artifacts, not for a person waiting on a
+	// button.
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 25*time.Second)
+	defer cancel()
+
+	checks, err := h.svc.TestTarget(ctx, wsID, backupsettings.SaveInput{
+		S3Endpoint: b.S3Endpoint, S3Bucket: b.S3Bucket, S3Region: b.S3Region,
+		S3AccessKey: b.S3AccessKey, S3SecretKey: secret,
+		S3UseSSL: b.S3UseSSL, S3ForcePathStyle: b.S3ForcePathStyle,
+		DatabaseBackupPath: b.DatabaseBackupPath, VolumeBackupPath: b.VolumeBackupPath,
+		BundlePath: b.BundlePath,
+	})
+	if err != nil {
+		return c.AbortBadRequest(err.Error())
 	}
-	// The secret may already be stored (the UI need not resend it).
-	secretSet := b.S3SecretKey != ""
-	if !secretSet {
-		if cur, err := h.svc.Get(wsID); err == nil {
-			secretSet = cur.S3SecretSet
+	return ok(c, backupTestResult(checks))
+}
+
+// TestBackupSettingsResponse is what a connection test reports: whether the
+// target is usable, a sentence for the operator, and the per-prefix detail
+// behind it.
+type TestBackupSettingsResponse struct {
+	OK      bool                         `json:"ok"`
+	Message string                       `json:"message"`
+	Checks  []backupsettings.PrefixCheck `json:"checks"`
+}
+
+// backupTestResult turns the probe results into the answer the operator needs:
+// what was actually done, or which prefix refused and why.
+func backupTestResult(checks []backupsettings.PrefixCheck) TestBackupSettingsResponse {
+	res := TestBackupSettingsResponse{OK: true, Checks: checks}
+	var failed, undeletable []string
+	for _, c := range checks {
+		switch {
+		case !c.OK():
+			res.OK = false
+			failed = append(failed, prefixLabel(c.Prefix)+": "+c.Error)
+		case !c.Removed:
+			undeletable = append(undeletable, prefixLabel(c.Prefix))
 		}
 	}
-	if !secretSet {
-		return c.AbortBadRequest("a secret key is required")
+	switch {
+	case !res.OK:
+		res.Message = strings.Join(failed, "; ")
+	case len(undeletable) > 0:
+
+		res.Message = "Wrote and read back a test object, but could not delete it in " +
+			strings.Join(undeletable, ", ") + ". Backups will work; deleting them will not."
+	default:
+		res.Message = "Wrote, read back and removed a test object in " +
+			strings.Join(prefixLabels(checks), ", ") + "."
 	}
-	return message(c, "backup settings look valid")
+	return res
+}
+
+func prefixLabel(prefix string) string {
+	if prefix == "" {
+		return "the bucket root"
+	}
+	return prefix + "/"
+}
+
+func prefixLabels(checks []backupsettings.PrefixCheck) []string {
+	out := make([]string, 0, len(checks))
+	for _, c := range checks {
+		out = append(out, prefixLabel(c.Prefix))
+	}
+	return out
 }
 
 func (h *WorkspaceBackupSettingsHandler) record(c *okapi.Context, wsID uint, action string) {

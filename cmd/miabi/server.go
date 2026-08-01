@@ -49,6 +49,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/secret"
 	"github.com/miabi-io/miabi/internal/services/settings"
 	"github.com/miabi-io/miabi/internal/services/volumebackup"
+	"github.com/miabi-io/miabi/internal/services/wsbackup"
 	dbstorage "github.com/miabi-io/miabi/internal/storage"
 	"github.com/miabi-io/miabi/internal/storage/logbackfill"
 	"github.com/miabi-io/miabi/internal/storage/migration"
@@ -512,9 +513,9 @@ func runServer(cli *okapicli.CLI) {
 			})
 
 			var runnerDispatcher *runners.Dispatcher
-			// The runner manager is discarded: runner alerts come from the engine's
-			// scan (see SetRunnerLister above), not from its connect/disconnect hook.
-			res.forward, runnerDispatcher, _ = routes.InitRoutes(app, res.db, res.redis, cfg, res.producer, dockerClient, nodeService, nodeManager, nodeGateway, clusterService, bus, proxyMgr, res.cron, logStore)
+
+			var wsBundleSvc *wsbackup.Service
+			res.forward, runnerDispatcher, _, wsBundleSvc = routes.InitRoutes(app, res.db, res.redis, cfg, res.producer, dockerClient, nodeService, nodeManager, nodeGateway, clusterService, bus, proxyMgr, res.cron, logStore)
 
 			// This process holds the runner tunnels, so its worker is the one that
 			// dispatches builds to runners — for both pipelines and git-source app
@@ -544,7 +545,7 @@ func runServer(cli *okapicli.CLI) {
 			// tunnels, so it is the only worker that consumes the remote-node queue
 			// and the only one that dispatches to runners.
 			res.worker = worker.NewServer(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.WorkerConcurrency, true)
-			if err := res.worker.Start(worker.NewMux(deployHandler, provisionHandler, upgradeHandler, fanoutHandler, webhookHandler, channelHandler, jobHandler, volumeBackupHandler, pipelineHandler, platformBackupHandler)); err != nil {
+			if err := res.worker.Start(worker.NewMux(deployHandler, provisionHandler, upgradeHandler, fanoutHandler, webhookHandler, channelHandler, jobHandler, volumeBackupHandler, pipelineHandler, platformBackupHandler, worker.NewWorkspaceBundleHandler(wsBundleSvc))); err != nil {
 				logger.Fatal("failed to start embedded worker", "error", err)
 			}
 

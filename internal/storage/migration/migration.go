@@ -48,6 +48,7 @@ func Run(db *gorm.DB) error {
 		&models.Backup{},
 		&models.BackupSchedule{},
 		&models.WorkspaceBackupSettings{},
+		&models.WorkspaceBundle{},
 		&models.VolumeBackup{},
 		&models.PlatformBackup{},
 		&models.PlatformBackupSettings{},

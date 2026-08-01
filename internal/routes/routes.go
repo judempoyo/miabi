@@ -85,6 +85,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/volumebackup"
 	"github.com/miabi-io/miabi/internal/services/webhook"
 	"github.com/miabi-io/miabi/internal/services/workspace"
+	"github.com/miabi-io/miabi/internal/services/wsbackup"
 	"github.com/miabi-io/miabi/internal/siem"
 	dbstorage "github.com/miabi-io/miabi/internal/storage"
 	"github.com/miabi-io/miabi/internal/storage/repositories"
@@ -114,49 +115,50 @@ type Router struct {
 }
 
 type routerHandlers struct {
-	health         *handlers.HealthHandler
-	auth           *handlers.AuthHandler
-	apiKey         *handlers.APIKeyHandler
-	workspace      *handlers.WorkspaceHandler
-	app            *handlers.ApplicationHandler
-	network        *handlers.NetworkHandler
-	stack          *handlers.StackHandler
-	route          *handlers.RouteHandler
-	domain         *handlers.DomainHandler
-	dnsProvider    *handlers.DNSProviderHandler
-	middleware     *handlers.MiddlewareHandler
-	portBinding    *handlers.PortBindingHandler
-	database       *handlers.DatabaseHandler
-	job            *handlers.JobHandler
-	secret         *handlers.SecretHandler
-	certificate    *handlers.CertificateHandler
-	volume         *handlers.VolumeHandler
-	backup         *handlers.BackupHandler
-	backupSettings *handlers.WorkspaceBackupSettingsHandler
-	volumeBackup   *handlers.VolumeBackupHandler
-	monitoring     *handlers.MonitoringHandler
-	analytics      *handlers.AnalyticsHandler
-	inbox          *handlers.NotificationInboxHandler
-	alerts         *handlers.AlertHandler
-	marketplace    *handlers.MarketplaceHandler
-	registry       *handlers.RegistryHandler
-	gitRepo        *handlers.GitRepositoryHandler
-	gitInspect     *handlers.GitInspectHandler
-	apply          *handlers.ApplyHandler
-	gitops         *handlers.GitOpsHandler
-	pipeline       *handlers.PipelineHandler
-	image          *handlers.ImageHandler
-	environment    *handlers.EnvironmentHandler
-	release        *handlers.ReleaseHandler
-	events         *handlers.EventsHandler
-	webhook        *handlers.WebhookHandler
-	notification   *handlers.NotificationHandler
-	node           *handlers.NodeHandler
-	cluster        *handlers.ClusterHandler
-	provider       *handlers.ProviderHandler
-	runner         *handlers.RunnerHandler
-	runnerGateway  *handlers.RunnerGatewayHandler
-	usage          *handlers.UsageHandler
+	health          *handlers.HealthHandler
+	auth            *handlers.AuthHandler
+	apiKey          *handlers.APIKeyHandler
+	workspace       *handlers.WorkspaceHandler
+	app             *handlers.ApplicationHandler
+	network         *handlers.NetworkHandler
+	stack           *handlers.StackHandler
+	route           *handlers.RouteHandler
+	domain          *handlers.DomainHandler
+	dnsProvider     *handlers.DNSProviderHandler
+	middleware      *handlers.MiddlewareHandler
+	portBinding     *handlers.PortBindingHandler
+	database        *handlers.DatabaseHandler
+	job             *handlers.JobHandler
+	secret          *handlers.SecretHandler
+	certificate     *handlers.CertificateHandler
+	volume          *handlers.VolumeHandler
+	backup          *handlers.BackupHandler
+	backupSettings  *handlers.WorkspaceBackupSettingsHandler
+	volumeBackup    *handlers.VolumeBackupHandler
+	workspaceBundle *handlers.WorkspaceBundleHandler
+	monitoring      *handlers.MonitoringHandler
+	analytics       *handlers.AnalyticsHandler
+	inbox           *handlers.NotificationInboxHandler
+	alerts          *handlers.AlertHandler
+	marketplace     *handlers.MarketplaceHandler
+	registry        *handlers.RegistryHandler
+	gitRepo         *handlers.GitRepositoryHandler
+	gitInspect      *handlers.GitInspectHandler
+	apply           *handlers.ApplyHandler
+	gitops          *handlers.GitOpsHandler
+	pipeline        *handlers.PipelineHandler
+	image           *handlers.ImageHandler
+	environment     *handlers.EnvironmentHandler
+	release         *handlers.ReleaseHandler
+	events          *handlers.EventsHandler
+	webhook         *handlers.WebhookHandler
+	notification    *handlers.NotificationHandler
+	node            *handlers.NodeHandler
+	cluster         *handlers.ClusterHandler
+	provider        *handlers.ProviderHandler
+	runner          *handlers.RunnerHandler
+	runnerGateway   *handlers.RunnerGatewayHandler
+	usage           *handlers.UsageHandler
 
 	adminUser           *handlers.AdminUserHandler
 	adminWorkspace      *handlers.AdminWorkspaceHandler
@@ -187,7 +189,7 @@ type routerHandlers struct {
 
 // InitRoutes wires repositories, services, handlers, and routes onto the app. It
 // returns the port-forward service so the caller can release its live sessions on shutdown.
-func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *config.Config, producer *worker.Producer, dockerClient docker.Client, nodeService *node.Service, nodeManager *nodes.Manager, nodeGateway *edgegateway.Service, clusterService *cluster.Service, bus *eventbus.Bus, proxyMgr proxy.Manager, cronManager *cronpkg.Manager, logStore *logstore.Store) (*portforward.Service, *runners.Dispatcher, *runners.Manager) {
+func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *config.Config, producer *worker.Producer, dockerClient docker.Client, nodeService *node.Service, nodeManager *nodes.Manager, nodeGateway *edgegateway.Service, clusterService *cluster.Service, bus *eventbus.Bus, proxyMgr proxy.Manager, cronManager *cronpkg.Manager, logStore *logstore.Store) (*portforward.Service, *runners.Dispatcher, *runners.Manager, *wsbackup.Service) {
 	metrics.SetBuildInfo(config.Version, config.CommitID)
 
 	// Repositories
@@ -820,6 +822,43 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	environmentRepo := repositories.NewEnvironmentRepository(db)
 	environmentService := environment.NewService(environmentRepo)
 	releaseService := releasesvc.NewService(releaseRepo, appRepo, environmentRepo, appService)
+	// Portable workspace backup: export a whole workspace — configuration,
+	// secrets, database dumps and volume archives — to the workspace's S3 target
+	// as one encrypted bundle, and restore it here or into a fresh workspace.
+	// It drives the platform's own create paths, hence the wide dependency set;
+	// it is constructed here, after every one of them exists.
+	wsBundleService := wsbackup.NewService(wsbackup.Deps{
+		Repo:        repositories.NewWorkspaceBundleRepository(db),
+		Apps:        appRepo,
+		Users:       userRepo,
+		Workspaces:  workspaceRepo,
+		Settings:    backupSettingsService,
+		Workspace:   workspaceService,
+		App:         appService,
+		Volume:      storageService,
+		Database:    databaseService,
+		Secret:      secretService,
+		Route:       routeService,
+		Middleware:  middlewareService,
+		Domain:      domainService,
+		DNSProvider: dnsProviderService,
+		Certificate: certificateService,
+		Stack:       stackService,
+		Network:     networkService,
+		Registry:    registryService,
+		GitRepo:     gitRepoService,
+		GitOps:      gitopsService,
+		Pipeline:    pipelineService,
+		Environment: environmentService,
+		Jobs:        jobService,
+		Backup:      backupService,
+		Clients:     nodeClients,
+		Images:      imageResolver,
+		InstallID:   installID,
+		Version:     config.Version,
+	})
+	wsBundleService.SetEnqueuer(producer) // export/restore runs on the worker
+
 	// GitOps auto-sync sweep for sources set to automatic reconciliation.
 	if cronManager != nil {
 		if err := cronManager.RegisterTask("gitops_sync", 0, "GitOps auto-sync sweep", "*/3 * * * *", func() error {
@@ -894,49 +933,50 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 		ee:               ee,
 		resourcePolicies: resourcePolicyRepo,
 		h: routerHandlers{
-			health:         handlers.NewHealthHandler(db, redisClient, dockerClient),
-			auth:           handlers.NewAuthHandler(authService, userRepo, sessionRepo, auditLogger, settingsProvider, cfg.DevMode, cfg.PasswordResetEnabled),
-			apiKey:         handlers.NewAPIKeyHandler(apiKeyService, apiKeyRepo, workspaceRepo, auditLogger),
-			usage:          handlers.NewUsageHandler(quotaService, appRepo, dbRepo, volumeRepo, networkRepo, jobRepo, apiKeyRepo, workspaceRepo, repositories.NewRunnerRepository(db)),
-			workspace:      handlers.NewWorkspaceHandler(workspaceService, accountService, auditRepo, userRepo, auditLogger, ee),
-			app:            handlers.NewApplicationHandler(appService, bus, auditLogger),
-			network:        handlers.NewNetworkHandler(networkService, auditLogger),
-			stack:          handlers.NewStackHandler(stackService, auditLogger),
-			route:          handlers.NewRouteHandler(routeService, settingsProvider, auditLogger),
-			domain:         handlers.NewDomainHandler(domainService, auditLogger),
-			dnsProvider:    handlers.NewDNSProviderHandler(dnsProviderService, auditLogger),
-			middleware:     handlers.NewMiddlewareHandler(middlewareService, auditLogger),
-			portBinding:    handlers.NewPortBindingHandler(portBindingService, auditLogger),
-			database:       handlers.NewDatabaseHandler(databaseService, appService, forwardService, secretService, userRepo, auditLogger, clusterService),
-			job:            handlers.NewJobHandler(jobService, auditLogger),
-			secret:         handlers.NewSecretHandler(secretService, auditLogger),
-			certificate:    handlers.NewCertificateHandler(certificateService, auditLogger),
-			volume:         handlers.NewVolumeHandler(storageService, userRepo, auditLogger),
-			backup:         handlers.NewBackupHandler(backupService, dbRepo, backupRepo, backupSettingsService, cronManager, auditLogger, cfg.RestoreMaxMB),
-			backupSettings: handlers.NewWorkspaceBackupSettingsHandler(backupSettingsService, auditLogger),
-			volumeBackup:   handlers.NewVolumeBackupHandler(volumeBackupService, volumeRepo, volumeBackupRepo, auditLogger),
-			monitoring:     handlers.NewMonitoringHandler(monitoringService),
-			analytics:      handlers.NewAnalyticsHandler(repositories.NewAnalyticsRepository(db), ee),
-			inbox:          handlers.NewNotificationInboxHandler(repositories.NewNotificationInboxRepository(db), bus),
-			alerts:         handlers.NewAlertHandler(repositories.NewAlertRepository(db)),
-			marketplace:    handlers.NewMarketplaceHandler(marketplaceService, auditLogger),
-			registry:       handlers.NewRegistryHandler(registryService, auditLogger),
-			gitRepo:        handlers.NewGitRepositoryHandler(gitRepoService, auditLogger),
-			gitInspect:     handlers.NewGitInspectHandler(gitRepoService),
-			apply:          handlers.NewApplyHandler(applyService, auditLogger),
-			gitops:         handlers.NewGitOpsHandler(gitopsService, auditLogger),
-			pipeline:       handlers.NewPipelineHandler(pipelineService, bus, auditLogger),
-			image:          handlers.NewImageHandler(imageService, dockerClient, auditLogger),
-			environment:    handlers.NewEnvironmentHandler(environmentService, auditLogger),
-			release:        handlers.NewReleaseHandler(releaseService, auditLogger),
-			events:         handlers.NewEventsHandler(eventsService, bus, appService, monitoringService),
-			webhook:        handlers.NewWebhookHandler(webhookService, auditLogger),
-			notification:   handlers.NewNotificationHandler(notificationService, auditLogger),
-			node:           handlers.NewNodeHandler(nodeService, nodeManager, nodeGateway, dockerImportService, housekeepingService, clusterService, imageResolver, cfg.ControlURL, auditLogger, bus, cfg.HostProcPath),
-			cluster:        handlers.NewClusterHandler(clusterService, nodeService, auditLogger),
-			provider:       handlers.NewProviderHandler(nodeService, routeService),
-			runner:         handlers.NewRunnerHandler(runnerService, auditLogger),
-			runnerGateway:  handlers.NewRunnerGatewayHandler(runnerService, runnerManager),
+			health:          handlers.NewHealthHandler(db, redisClient, dockerClient),
+			auth:            handlers.NewAuthHandler(authService, userRepo, sessionRepo, auditLogger, settingsProvider, cfg.DevMode, cfg.PasswordResetEnabled),
+			apiKey:          handlers.NewAPIKeyHandler(apiKeyService, apiKeyRepo, workspaceRepo, auditLogger),
+			usage:           handlers.NewUsageHandler(quotaService, appRepo, dbRepo, volumeRepo, networkRepo, jobRepo, apiKeyRepo, workspaceRepo, repositories.NewRunnerRepository(db)),
+			workspace:       handlers.NewWorkspaceHandler(workspaceService, accountService, auditRepo, userRepo, auditLogger, ee),
+			app:             handlers.NewApplicationHandler(appService, bus, auditLogger),
+			network:         handlers.NewNetworkHandler(networkService, auditLogger),
+			stack:           handlers.NewStackHandler(stackService, auditLogger),
+			route:           handlers.NewRouteHandler(routeService, settingsProvider, auditLogger),
+			domain:          handlers.NewDomainHandler(domainService, auditLogger),
+			dnsProvider:     handlers.NewDNSProviderHandler(dnsProviderService, auditLogger),
+			middleware:      handlers.NewMiddlewareHandler(middlewareService, auditLogger),
+			portBinding:     handlers.NewPortBindingHandler(portBindingService, auditLogger),
+			database:        handlers.NewDatabaseHandler(databaseService, appService, forwardService, secretService, userRepo, auditLogger, clusterService),
+			job:             handlers.NewJobHandler(jobService, auditLogger),
+			secret:          handlers.NewSecretHandler(secretService, auditLogger),
+			certificate:     handlers.NewCertificateHandler(certificateService, auditLogger),
+			volume:          handlers.NewVolumeHandler(storageService, userRepo, auditLogger),
+			backup:          handlers.NewBackupHandler(backupService, dbRepo, backupRepo, backupSettingsService, cronManager, auditLogger, cfg.RestoreMaxMB),
+			backupSettings:  handlers.NewWorkspaceBackupSettingsHandler(backupSettingsService, auditLogger),
+			volumeBackup:    handlers.NewVolumeBackupHandler(volumeBackupService, volumeRepo, volumeBackupRepo, auditLogger),
+			workspaceBundle: handlers.NewWorkspaceBundleHandler(wsBundleService, auditLogger),
+			monitoring:      handlers.NewMonitoringHandler(monitoringService),
+			analytics:       handlers.NewAnalyticsHandler(repositories.NewAnalyticsRepository(db), ee),
+			inbox:           handlers.NewNotificationInboxHandler(repositories.NewNotificationInboxRepository(db), bus),
+			alerts:          handlers.NewAlertHandler(repositories.NewAlertRepository(db)),
+			marketplace:     handlers.NewMarketplaceHandler(marketplaceService, auditLogger),
+			registry:        handlers.NewRegistryHandler(registryService, auditLogger),
+			gitRepo:         handlers.NewGitRepositoryHandler(gitRepoService, auditLogger),
+			gitInspect:      handlers.NewGitInspectHandler(gitRepoService),
+			apply:           handlers.NewApplyHandler(applyService, auditLogger),
+			gitops:          handlers.NewGitOpsHandler(gitopsService, auditLogger),
+			pipeline:        handlers.NewPipelineHandler(pipelineService, bus, auditLogger),
+			image:           handlers.NewImageHandler(imageService, dockerClient, auditLogger),
+			environment:     handlers.NewEnvironmentHandler(environmentService, auditLogger),
+			release:         handlers.NewReleaseHandler(releaseService, auditLogger),
+			events:          handlers.NewEventsHandler(eventsService, bus, appService, monitoringService),
+			webhook:         handlers.NewWebhookHandler(webhookService, auditLogger),
+			notification:    handlers.NewNotificationHandler(notificationService, auditLogger),
+			node:            handlers.NewNodeHandler(nodeService, nodeManager, nodeGateway, dockerImportService, housekeepingService, clusterService, imageResolver, cfg.ControlURL, auditLogger, bus, cfg.HostProcPath),
+			cluster:         handlers.NewClusterHandler(clusterService, nodeService, auditLogger),
+			provider:        handlers.NewProviderHandler(nodeService, routeService),
+			runner:          handlers.NewRunnerHandler(runnerService, auditLogger),
+			runnerGateway:   handlers.NewRunnerGatewayHandler(runnerService, runnerManager),
 
 			adminUser:           handlers.NewAdminUserHandler(db, userRepo, sessionRepo, workspaceRepo, auditRepo, sessionStore, auditLogger, accountService, cfg.DeletionGraceDays),
 			adminWorkspace:      handlers.NewAdminWorkspaceHandler(db, workspaceRepo, auditLogger),
@@ -1109,6 +1149,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	r.app.Register(r.volumeBackupRoutes()...)
 	r.app.Register(r.backupRoutes()...)
 	r.app.Register(r.workspaceBackupSettingsRoutes()...)
+	r.app.Register(r.workspaceBundleRoutes()...)
 	r.app.Register(r.monitoringRoutes()...)
 	r.app.Register(r.marketplaceRoutes()...)
 	r.app.Register(r.registryRoutes()...)
@@ -1159,7 +1200,10 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 		logger.Warn("proxy startup resync failed", "err", err)
 	}
 
-	return forwardService, runnerDispatcher, runnerManager
+	// The bundle service goes back to the caller so the embedded worker can run
+	// export/restore tasks against this exact service graph — the one with every
+	// guard, quota and provisioning path wired.
+	return forwardService, runnerDispatcher, runnerManager, wsBundleService
 }
 
 // RegisterFallbacks wires NoRoute/NoMethod handlers so router-level errors use
