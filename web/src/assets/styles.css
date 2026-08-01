@@ -102,7 +102,17 @@
   --sidebar-text-active: #ffffff;
 
   --checkmark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke-width='1.5' stroke='black'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='m4.5 12.75 6 6 9-13.5' /%3E%3C/svg%3E");
-  --checkmark-color: #581c87
+  --checkmark-color: #581c87;
+
+  /* Status-class colors for chart marks. 5xx steps deeper than --danger-500
+     because 4xx and 5xx sit against each other as adjacent pie wedges and
+     stacked bar segments: amber #d97706 vs #ef4444 measures ΔE 11.8 to normal
+     vision and 4.4 under deuteranopia — indistinguishable where they touch.
+     Dark mode gets its own step; #b91c1c goes muddy on a dark surface. */
+  --chart-2xx: var(--success-600);
+  --chart-3xx: #2563eb;
+  --chart-4xx: var(--warning-600);
+  --chart-5xx: var(--danger-700);
 }
 
 /* ─── Dark Theme ─── */
@@ -139,6 +149,8 @@
   --sidebar-border: rgba(255, 255, 255, 0.06);
   --sidebar-text: #8888a8;
   --sidebar-text-active: #e8e8f0;
+
+  --chart-5xx: #e11d48;
 
   --success-50: #0d2818;
   --warning-50: #2d1f0a;
@@ -1070,18 +1082,18 @@ input[type="checkbox"]:checked::before {
 .a-legend { display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
 .dot-ok { background: var(--primary-500); }
-.dot-5xx { background: var(--danger-500); }
-.dot-2xx { background: var(--success-600); }
-.dot-3xx { background: #2563eb; }
-.dot-4xx { background: var(--warning-600); }
+.dot-5xx { background: var(--chart-5xx); }
+.dot-2xx { background: var(--chart-2xx); }
+.dot-3xx { background: var(--chart-3xx); }
+.dot-4xx { background: var(--chart-4xx); }
 
-/* status-class stacked bar */
+/* status-class stacked bar (human vs bot on Web Analytics) */
 .status-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--border-primary); }
 .status-bar .seg { height: 100%; }
-.seg-2xx { background: var(--success-600); }
-.seg-3xx { background: #2563eb; }
-.seg-4xx { background: var(--warning-600); }
-.seg-5xx { background: var(--danger-500); }
+.seg-2xx { background: var(--chart-2xx); }
+.seg-3xx { background: var(--chart-3xx); }
+.seg-4xx { background: var(--chart-4xx); }
+.seg-5xx { background: var(--chart-5xx); }
 .status-legend { display: flex; gap: 18px; margin-top: 12px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
 .status-legend b { color: var(--text-primary); }
 
