@@ -6,6 +6,7 @@ import { useAnalyticsStore, ANALYTICS_RANGES } from '@/stores/analytics'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { analyticsApi } from '@/api/analytics'
 import { apiUrl } from '@/api/client'
+import { windowLabel } from './timeaxis'
 
 // Shared sticky header for every analytics page: title, sub-page tabs, the app
 // filter and the time-range selector. It owns the (re)load lifecycle so each page
@@ -25,6 +26,10 @@ function rangeLocked(key: string): boolean {
   const cap = report.value?.retention_days ?? -1
   return cap >= 0 && (RANGE_DAYS[key] ?? 0) > cap
 }
+// The absolute window behind the relative range, in the viewer's own timezone —
+// "24h" alone doesn't say where the charts start, and every axis label is local.
+const rangeWindow = computed(() => (report.value ? windowLabel(report.value.range.since, report.value.range.until) : ''))
+const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'
 const exportable = computed(() => report.value?.exportable ?? false)
 const exportHref = computed(() =>
   currentWorkspaceId.value
@@ -76,6 +81,9 @@ function onAppChange(e: Event) {
       <div class="a-title">
         <h1>Analytics</h1>
         <span class="a-ns">{{ ws.contextLabel }}</span>
+        <span v-if="rangeWindow" class="a-window" :title="`All times shown in your local timezone (${tz})`">
+          <span class="mdi mdi-clock-outline"></span> {{ rangeWindow }}
+        </span>
       </div>
       <div class="a-controls">
         <select
@@ -134,6 +142,8 @@ function onAppChange(e: Event) {
 .a-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .a-title h1 { margin: 0; font-size: 24px; line-height: 1.2; }
 .a-ns { color: var(--text-muted); font-size: 14px; }
+.a-window { color: var(--text-muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.a-window .mdi { font-size: 13px; vertical-align: -1px; }
 .a-controls { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; max-width: 100%;}
 .a-select { padding: 7px 10px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; }
 .a-range {display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); flex-shrink: 1; min-width: 0; overflow-x: auto; scrollbar-width: none;}

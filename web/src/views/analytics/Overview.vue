@@ -3,23 +3,19 @@ import { useRouter } from 'vue-router'
 import Sparkline from '@/components/Sparkline.vue'
 import AnalyticsShell from './AnalyticsShell.vue'
 import StatTile from './StatTile.vue'
+import RequestsChart from './RequestsChart.vue'
 import type { AnalyticsReport } from '@/api/analytics'
 import { fmtNum, fmtBytes, fmtMs, fmtPct, delta, countryFlag, countryName } from './format'
 
 const router = useRouter()
 
-function maxReq(r: AnalyticsReport): number {
-  return Math.max(1, ...r.series.map((p) => p.requests))
-}
-function barTitle(p: AnalyticsReport['series'][number]): string {
-  return `${new Date(p.t).toLocaleString()} · ${fmtNum(p.requests)} req · ${p.errors_4xx} 4xx · ${p.errors_5xx} 5xx`
-}
 // Rate of n over the range's total requests (0..1).
 function rate(n: number, total: number): number {
   return total > 0 ? n / total : 0
 }
+// Quiet buckets carry no latency, so they'd drag the sparkline to zero.
 function latency(r: AnalyticsReport): number[] {
-  return r.series.map((p) => p.p95_latency_ms)
+  return r.series.filter((p) => p.requests > 0).map((p) => p.p95_latency_ms)
 }
 function statusTotal(r: AnalyticsReport): number {
   const s = r.status
@@ -52,24 +48,11 @@ const topCountries = (r: AnalyticsReport) => r.web.top_countries.slice(0, 5)
     <div class="card">
       <div class="a-card-header">
         <h3>Requests over time</h3>
-        <span class="a-muted">per {{ report.granularity }}</span>
+        <span class="a-muted">{{ fmtNum(report.totals.requests) }} requests · per {{ report.granularity }}</span>
       </div>
       <div class="card-body">
-        <div v-if="report.series.length" class="barchart">
-          <div v-for="(p, i) in report.series" :key="i" class="bar-col" :title="barTitle(p)">
-            <div class="bar-stack">
-              <div class="bar bar-5xx" :style="{ height: (p.errors_5xx / maxReq(report)) * 100 + '%' }"></div>
-              <div class="bar bar-4xx" :style="{ height: (p.errors_4xx / maxReq(report)) * 100 + '%' }"></div>
-              <div class="bar bar-ok" :style="{ height: ((p.requests - p.errors) / maxReq(report)) * 100 + '%' }"></div>
-            </div>
-          </div>
-        </div>
+        <RequestsChart v-if="report.series.length" :series="report.series" :granularity="report.granularity" />
         <p v-else class="a-muted">Not enough data points to plot.</p>
-        <div class="a-legend">
-          <span><i class="dot dot-ok"></i> Success</span>
-          <span><i class="dot dot-4xx"></i> Client errors (4xx)</span>
-          <span><i class="dot dot-5xx"></i> Server errors (5xx)</span>
-        </div>
       </div>
     </div>
 

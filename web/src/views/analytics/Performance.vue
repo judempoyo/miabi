@@ -1,13 +1,8 @@
 <script setup lang="ts">
-import Sparkline from '@/components/Sparkline.vue'
 import AnalyticsShell from './AnalyticsShell.vue'
 import StatTile from './StatTile.vue'
-import type { AnalyticsReport } from '@/api/analytics'
+import LatencyChart from './LatencyChart.vue'
 import { fmtNum, fmtMs, fmtPct, routeLabel } from './format'
-
-function latency(r: AnalyticsReport): number[] {
-  return r.series.map((p) => p.p95_latency_ms)
-}
 </script>
 
 <template>
@@ -23,7 +18,7 @@ function latency(r: AnalyticsReport): number[] {
       <div class="card">
         <div class="a-card-header"><h3>p95 latency over time</h3><span class="a-muted">per {{ report.granularity }}</span></div>
         <div class="card-body">
-          <Sparkline v-if="latency(report).length > 1" :values="latency(report)" :width="560" :height="90" stroke="var(--warning-600)" />
+          <LatencyChart v-if="report.series.length" :series="report.series" :granularity="report.granularity" :height="150" />
           <p v-else class="a-muted">Not enough data points to plot.</p>
         </div>
       </div>
