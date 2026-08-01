@@ -243,3 +243,59 @@ func TestIngestPrefersPathTemplateWhenPresent(t *testing.T) {
 		t.Fatalf("template not preferred: %+v", rows[0].TopPaths)
 	}
 }
+
+// The dashboard reads BuildSummary and the analytics pages read BuildReport, so
+// the figures they share have to agree — otherwise the same workspace shows two
+// different request counts on two pages.
+func TestBuildSummaryMatchesReport(t *testing.T) {
+	until := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	since := until.Add(-24 * time.Hour)
+
+	mk := func(offset time.Duration, route string, reqs, s2, s4, s5 int64) models.AnalyticsRollup {
+		a := NewAggregator()
+		bucket := until.Add(-offset)
+		for i := int64(0); i < reqs; i++ {
+			status := 200
+			switch {
+			case i < s5:
+				status = 500
+			case i < s5+s4:
+				status = 404
+			}
+			a.Ingest(&Event{
+				Ts: bucket.UnixMilli(), Route: route, Method: "GET", Status: status,
+				Path: "/p", DurationMs: 20 + i, UpstreamMs: 10, VID: "v" + strconv.FormatInt(i, 10),
+				UA: "Mozilla/5.0 Chrome/120", Country: "US",
+			}, 9, 3)
+		}
+		_ = s2
+		return *a.Flush(bucket.Add(2 * time.Minute))[0]
+	}
+
+	rows := []models.AnalyticsRollup{
+		mk(20*time.Hour, "mb-ws9-a", 10, 8, 1, 1),
+		mk(15*time.Hour, "mb-ws9-b", 6, 6, 0, 0),
+		mk(2*time.Hour, "mb-ws9-a", 4, 3, 1, 0),
+	}
+
+	rep := BuildReport(rows, since, until)
+	sum := BuildSummary(rows, since, until)
+
+	if sum.Granularity != rep.Granularity {
+		t.Fatalf("granularity: summary %q, report %q", sum.Granularity, rep.Granularity)
+	}
+	if sum.Totals != rep.Totals {
+		t.Fatalf("totals differ:\n summary %+v\n report  %+v", sum.Totals, rep.Totals)
+	}
+	if sum.Status != rep.Status {
+		t.Fatalf("status differ: summary %+v, report %+v", sum.Status, rep.Status)
+	}
+	if len(sum.Series) != len(rep.Series) {
+		t.Fatalf("series length: summary %d, report %d", len(sum.Series), len(rep.Series))
+	}
+	for i := range sum.Series {
+		if sum.Series[i] != rep.Series[i] {
+			t.Fatalf("series[%d] differs:\n summary %+v\n report  %+v", i, sum.Series[i], rep.Series[i])
+		}
+	}
+}

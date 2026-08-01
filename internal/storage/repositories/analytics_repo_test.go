@@ -102,3 +102,65 @@ func TestAnalyticsUpsertMergesAndQueries(t *testing.T) {
 		t.Fatalf("prune = %d err=%v", n, err)
 	}
 }
+
+// RangeSummary must return the same counters as Range while leaving the top-K
+// blobs undecoded. A wrong column name here would surface as silently zeroed
+// traffic on the dashboard rather than as an error.
+func TestRangeSummarySelectsCountersOnly(t *testing.T) {
+	repo := newAnalyticsDB(t)
+	bucket := time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC)
+
+	ev := func(status int, dur int64, vid, path string) *analytics.Event {
+		return &analytics.Event{
+			Route: "mb-ws5-api", Method: "GET", Status: status, Path: path,
+			ReqBytes: 10, RespBytes: 100, DurationMs: dur, UpstreamMs: dur, VID: vid,
+			Country: "US", UA: "Mozilla/5.0 Chrome/120", RefererHost: "google.com",
+		}
+	}
+	if err := repo.Upsert([]*models.AnalyticsRollup{
+		rollupFrom(bucket, 5, 7, ev(200, 30, "a", "/"), ev(404, 20, "b", "/x"), ev(500, 40, "c", "/y")),
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	from, to := bucket.Add(-time.Hour), bucket.Add(time.Hour)
+	full, err := repo.Range(5, nil, from, to)
+	if err != nil || len(full) != 1 {
+		t.Fatalf("Range: rows=%d err=%v", len(full), err)
+	}
+	lean, err := repo.RangeSummary(5, nil, from, to)
+	if err != nil || len(lean) != 1 {
+		t.Fatalf("RangeSummary: rows=%d err=%v", len(lean), err)
+	}
+
+	f, l := full[0], lean[0]
+	if !l.Bucket.Equal(f.Bucket) {
+		t.Fatalf("bucket = %v, want %v", l.Bucket, f.Bucket)
+	}
+	if l.Requests != f.Requests || l.BytesIn != f.BytesIn || l.BytesOut != f.BytesOut {
+		t.Fatalf("counters differ: lean %+v full %+v", l, f)
+	}
+	// The status columns are the easy ones to misname (status2xx, not status_2xx).
+	if l.Status2xx != f.Status2xx || l.Status3xx != f.Status3xx ||
+		l.Status4xx != f.Status4xx || l.Status5xx != f.Status5xx {
+		t.Fatalf("status columns not selected: lean %d/%d/%d/%d, full %d/%d/%d/%d",
+			l.Status2xx, l.Status3xx, l.Status4xx, l.Status5xx,
+			f.Status2xx, f.Status3xx, f.Status4xx, f.Status5xx)
+	}
+	if l.DurationSum != f.DurationSum || len(l.DurationHist) != len(f.DurationHist) {
+		t.Fatalf("latency columns not selected: lean sum=%d hist=%d", l.DurationSum, len(l.DurationHist))
+	}
+	if analytics.UniquesOf(l.VisitorsHLL) != analytics.UniquesOf(f.VisitorsHLL) {
+		t.Fatalf("visitor sketch not selected: lean %d, full %d",
+			analytics.UniquesOf(l.VisitorsHLL), analytics.UniquesOf(f.VisitorsHLL))
+	}
+
+	// The point of the narrower query: the top-K blobs are never read or decoded.
+	if len(f.TopPaths) == 0 {
+		t.Fatal("fixture has no top paths, so the assertion below proves nothing")
+	}
+	if len(l.TopPaths) != 0 || len(l.TopCountries) != 0 || len(l.TopMethods) != 0 || len(l.UpstreamHist) != 0 {
+		t.Fatalf("summary decoded blobs it doesn't need: paths=%d countries=%d methods=%d upstream=%d",
+			len(l.TopPaths), len(l.TopCountries), len(l.TopMethods), len(l.UpstreamHist))
+	}
+}

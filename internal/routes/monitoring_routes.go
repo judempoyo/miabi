@@ -94,6 +94,14 @@ func (r *Router) monitoringRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodGet,
+			Path:        "/{workspace}/analytics/summary",
+			Group:       g,
+			Middlewares: scoped(models.WorkspaceRoleViewer),
+			Handler:     r.h.analytics.Summary,
+			Summary:     "Headline traffic totals + request series for the dashboard — ?range=&app=",
+		},
+		{
+			Method:      http.MethodGet,
 			Path:        "/{workspace}/analytics/live",
 			Group:       g,
 			Middlewares: scoped(models.WorkspaceRoleViewer),

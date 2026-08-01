@@ -146,6 +146,112 @@ type seriesAgg struct {
 	sketches                                                  [][]byte
 }
 
+// addSeriesRow folds one rollup into its output bucket.
+func addSeriesRow(series map[int64]*seriesAgg, key int64, row *models.AnalyticsRollup) {
+	sp := series[key]
+	if sp == nil {
+		sp = &seriesAgg{durHist: make([]int64, histLen())}
+		series[key] = sp
+	}
+	sp.requests += row.Requests
+	sp.bytesIn += row.BytesIn
+	sp.bytesOut += row.BytesOut
+	sp.errors += row.Status4xx + row.Status5xx
+	sp.errors4xx += row.Status4xx
+	sp.errors5xx += row.Status5xx
+	sp.durSum += row.DurationSum
+	sp.durHist = addHist(sp.durHist, row.DurationHist)
+	if len(row.VisitorsHLL) > 0 {
+		sp.sketches = append(sp.sketches, row.VisitorsHLL)
+	}
+}
+
+// emitSeries returns one point per bucket across the whole window, ordered by
+// time — buckets with no traffic are emitted as zeros rather than skipped, so the
+// series stays evenly spaced in time. Charts plot it against a real time axis,
+// where a quiet hour has to read as a gap, not disappear between its neighbours.
+func emitSeries(series map[int64]*seriesAgg, trunc truncFunc, step time.Duration, since, until time.Time) []SeriesPoint {
+	out := make([]SeriesPoint, 0, len(series)+1)
+	for t := trunc(since); !t.After(trunc(until)) && len(out) < maxSeriesPoints; t = t.Add(step) {
+		pt := SeriesPoint{T: t.UTC()}
+		if sp := series[t.Unix()]; sp != nil {
+			pt.Requests = sp.requests
+			pt.BytesIn = sp.bytesIn
+			pt.BytesOut = sp.bytesOut
+			pt.Errors = sp.errors
+			pt.Errors4xx = sp.errors4xx
+			pt.Errors5xx = sp.errors5xx
+			pt.Uniques = MergeUniques(sp.sketches)
+			pt.P95Latency = Percentile(sp.durHist, 0.95)
+			if sp.requests > 0 {
+				pt.AvgLatency = float64(sp.durSum) / float64(sp.requests)
+			}
+		}
+		out = append(out, pt)
+	}
+	return out
+}
+
+// Summary is the dashboard's slice of a report: the headline totals, the
+// status split and the request series. It deliberately omits the categorical
+// breakdowns, per-route stats and upstream percentiles the analytics pages need,
+// so the dashboard's traffic card doesn't pay for them.
+type Summary struct {
+	Range       Window        `json:"range"`
+	Granularity string        `json:"granularity"`
+	Totals      Totals        `json:"totals"`
+	Series      []SeriesPoint `json:"series"`
+	Status      StatusBreak   `json:"status"`
+	// Compare holds the totals of the immediately preceding, equal-length window,
+	// for period-over-period deltas. Nil when not requested.
+	Compare *Totals `json:"compare,omitempty"`
+}
+
+// BuildSummary reduces rollups to the dashboard's view of a range. Feed it rows
+// from AnalyticsRepository.RangeSummary — it reads only the counters, the latency
+// histogram and the visitor sketch.
+func BuildSummary(rows []models.AnalyticsRollup, since, until time.Time) Summary {
+	gran, trunc, step := granularityFor(until.Sub(since))
+	sum := Summary{
+		Range:       Window{Since: since, Until: until},
+		Granularity: gran,
+	}
+
+	totalDur := make([]int64, histLen())
+	series := map[int64]*seriesAgg{}
+	var allSketches [][]byte
+
+	for i := range rows {
+		row := &rows[i]
+		sum.Totals.Requests += row.Requests
+		sum.Totals.BytesIn += row.BytesIn
+		sum.Totals.BytesOut += row.BytesOut
+		sum.Status.S2xx += row.Status2xx
+		sum.Status.S3xx += row.Status3xx
+		sum.Status.S4xx += row.Status4xx
+		sum.Status.S5xx += row.Status5xx
+		sum.Totals.AvgLatency += float64(row.DurationSum) // sum now, divide later
+		totalDur = addHist(totalDur, row.DurationHist)
+		if len(row.VisitorsHLL) > 0 {
+			allSketches = append(allSketches, row.VisitorsHLL)
+		}
+		addSeriesRow(series, trunc(row.Bucket).Unix(), row)
+	}
+
+	if sum.Totals.Requests > 0 {
+		sum.Totals.AvgLatency = sum.Totals.AvgLatency / float64(sum.Totals.Requests)
+		sum.Totals.ErrorRate = float64(sum.Status.S4xx+sum.Status.S5xx) / float64(sum.Totals.Requests)
+	} else {
+		sum.Totals.AvgLatency = 0
+	}
+	sum.Totals.P50Latency = Percentile(totalDur, 0.50)
+	sum.Totals.P95Latency = Percentile(totalDur, 0.95)
+	sum.Totals.P99Latency = Percentile(totalDur, 0.99)
+	sum.Totals.UniqueVisit = MergeUniques(allSketches)
+	sum.Series = emitSeries(series, trunc, step, since, until)
+	return sum
+}
+
 // BuildReport reduces the raw minute rollups of a range into the combined
 // dashboard report. granularity is auto-selected from the span. It performs one
 // pass for the totals/status/web breakdowns and a grouped pass for the series,
@@ -201,23 +307,7 @@ func BuildReport(rows []models.AnalyticsRollup, since, until time.Time) Report {
 		}
 
 		// Time series bucket.
-		key := trunc(row.Bucket).Unix()
-		sp := series[key]
-		if sp == nil {
-			sp = &seriesAgg{durHist: make([]int64, histLen())}
-			series[key] = sp
-		}
-		sp.requests += row.Requests
-		sp.bytesIn += row.BytesIn
-		sp.bytesOut += row.BytesOut
-		sp.errors += row.Status4xx + row.Status5xx
-		sp.errors4xx += row.Status4xx
-		sp.errors5xx += row.Status5xx
-		sp.durSum += row.DurationSum
-		sp.durHist = addHist(sp.durHist, row.DurationHist)
-		if len(row.VisitorsHLL) > 0 {
-			sp.sketches = append(sp.sketches, row.VisitorsHLL)
-		}
+		addSeriesRow(series, trunc(row.Bucket).Unix(), row)
 
 		// Per-route (for slowest-routes).
 		rs := routes[row.RouteName]
@@ -276,24 +366,7 @@ func BuildReport(rows []models.AnalyticsRollup, since, until time.Time) Report {
 		TopMethods:     topN(methods, 10),
 	}
 
-	rep.Series = make([]SeriesPoint, 0, len(series)+1)
-	for t := trunc(since); !t.After(trunc(until)) && len(rep.Series) < maxSeriesPoints; t = t.Add(step) {
-		pt := SeriesPoint{T: t.UTC()}
-		if sp := series[t.Unix()]; sp != nil {
-			pt.Requests = sp.requests
-			pt.BytesIn = sp.bytesIn
-			pt.BytesOut = sp.bytesOut
-			pt.Errors = sp.errors
-			pt.Errors4xx = sp.errors4xx
-			pt.Errors5xx = sp.errors5xx
-			pt.Uniques = MergeUniques(sp.sketches)
-			pt.P95Latency = Percentile(sp.durHist, 0.95)
-			if sp.requests > 0 {
-				pt.AvgLatency = float64(sp.durSum) / float64(sp.requests)
-			}
-		}
-		rep.Series = append(rep.Series, pt)
-	}
+	rep.Series = emitSeries(series, trunc, step, since, until)
 	return rep
 }
 

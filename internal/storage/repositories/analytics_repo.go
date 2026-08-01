@@ -69,6 +69,31 @@ func (r *AnalyticsRepository) Range(workspaceID uint, appID *uint, since, until 
 	return rows, err
 }
 
+// summaryColumns are the columns BuildSummary reads. The seven top-K maps and
+// the upstream histogram are JSON blobs that gorm deserializes on read whether
+// or not the caller looks at them — and they dwarf the counters in a row. Naming
+// the columns keeps the dashboard's query to the counters, the latency histogram
+// and the visitor sketch.
+var summaryColumns = []string{
+	"id", "bucket", "requests", "bytes_in", "bytes_out",
+	"status2xx", "status3xx", "status4xx", "status5xx",
+	"duration_hist", "duration_sum", "visitors_hll",
+}
+
+// RangeSummary is Range with only the columns the summary needs. Same rows, same
+// order — a fraction of the bytes and none of the top-K decoding.
+func (r *AnalyticsRepository) RangeSummary(workspaceID uint, appID *uint, since, until time.Time) ([]models.AnalyticsRollup, error) {
+	q := r.db.Model(&models.AnalyticsRollup{}).
+		Select(summaryColumns).
+		Where("workspace_id = ? AND bucket >= ? AND bucket < ?", workspaceID, since, until)
+	if appID != nil {
+		q = q.Where("application_id = ?", *appID)
+	}
+	var rows []models.AnalyticsRollup
+	err := q.Order("bucket ASC").Find(&rows).Error
+	return rows, err
+}
+
 // AppIDs lists the distinct application ids that have analytics data in the
 // window, so the UI can populate its app filter with only apps that have traffic.
 func (r *AnalyticsRepository) AppIDs(workspaceID uint, since, until time.Time) ([]uint, error) {
