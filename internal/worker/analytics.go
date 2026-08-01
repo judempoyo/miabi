@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jkaninda/logger"
@@ -26,6 +27,9 @@ const (
 	analyticsBucketGrace = 90 * time.Second
 	// analyticsRouteTTL bounds how stale the route→app reverse map may get.
 	analyticsRouteTTL = time.Minute
+	// analyticsStopTimeout bounds how long shutdown waits for the final flush
+	// before giving up on it — a hung database must not hold the process open.
+	analyticsStopTimeout = 10 * time.Second
 )
 
 // AnalyticsConsumer reads Goma Gateway's per-request event stream, rolls events
@@ -78,7 +82,11 @@ func NewAnalyticsConsumer(rdb *redis.Client, routes *repositories.RouteRepositor
 
 // Run consumes until ctx is cancelled. It reads batches in one goroutine and
 // flushes closed buckets on a ticker in another, sharing the aggregator (which is
-// concurrency-safe). Returns when ctx is done.
+// concurrency-safe).
+//
+// It returns only once the final flush has completed, so a caller can wait for
+// it before closing the database — buckets live in memory until their minute
+// closes, and returning early would drop them.
 func (c *AnalyticsConsumer) Run(ctx context.Context) {
 	if err := c.ensureGroup(ctx); err != nil {
 		logger.Warn("analytics: consumer group setup failed; analytics disabled", "error", err)
@@ -86,7 +94,13 @@ func (c *AnalyticsConsumer) Run(ctx context.Context) {
 	}
 	logger.Info("Miabi analytics consumer started", "stream", c.stream, "consumer", c.consumer)
 
-	go c.flushLoop(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.flushLoop(ctx)
+	}()
+	defer wg.Wait()
 
 	for {
 		if ctx.Err() != nil {
@@ -129,6 +143,34 @@ func (c *AnalyticsConsumer) Run(ctx context.Context) {
 				logger.Debug("analytics: XAck failed", "error", err)
 			}
 		}
+	}
+}
+
+// Start runs the consumer in the background and returns a function that stops it
+// and waits for the final flush. Call the returned function during shutdown,
+// before closing the database — the open minute buckets are only written by that
+// last flush. It gives up after analyticsStopTimeout so a stuck flush can't
+// block the process from exiting. Safe to call more than once.
+func (c *AnalyticsConsumer) Start(ctx context.Context) func() {
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.Run(runCtx)
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+				logger.Debug("analytics: consumer stopped")
+			case <-time.After(analyticsStopTimeout):
+				logger.Warn("analytics: consumer did not stop in time; open buckets may be lost",
+					"timeout", analyticsStopTimeout)
+			}
+		})
 	}
 }
 

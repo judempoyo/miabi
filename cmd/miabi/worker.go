@@ -292,7 +292,9 @@ func runWorker() error {
 			time.Duration(cfg.AnalyticsFlushSeconds)*time.Second, analyticsRetention(cfg, edition),
 			analytics.NewLiveTracker(cfg.Redis.Client, liveWindow(cfg)),
 		)
-		go analyticsConsumer.Run(context.Background())
+
+		stopAnalytics := analyticsConsumer.Start(context.Background())
+		defer stopAnalytics()
 	}
 
 	logger.Info("Miabi worker started", "version", config.Version, "concurrency", cfg.WorkerConcurrency)

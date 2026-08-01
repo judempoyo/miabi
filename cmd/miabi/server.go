@@ -73,6 +73,8 @@ type serverResources struct {
 	forward      *portforward.Service
 	stopScraper  context.CancelFunc
 	cancelEvents context.CancelFunc
+	// stopAnalytics stops the analytics consumer and waits for its final flush.
+	stopAnalytics func()
 	// entitlements is the resolved license/edition snapshot, captured at startup
 	// so OnStarted can log which edition the instance is running.
 	entitlements enterprise.Entitlements
@@ -480,7 +482,9 @@ func runServer(cli *okapicli.CLI) {
 					time.Duration(cfg.AnalyticsFlushSeconds)*time.Second, analyticsRetention(cfg, edition),
 					analytics.NewLiveTracker(res.redis, liveWindow(cfg)),
 				)
-				go analyticsConsumer.Run(eventCtx)
+				// shutdownServer waits on this before closing Redis and the
+				// database, which the final flush needs.
+				res.stopAnalytics = analyticsConsumer.Start(eventCtx)
 			}
 
 			// Backup scheduler (cron) — runs scheduled database backups.
@@ -634,6 +638,11 @@ func shutdownServer(res *serverResources) {
 	}
 	if res.cancelEvents != nil {
 		res.cancelEvents()
+	}
+	// Before Redis and the database go away below: the open minute buckets are
+	// only written by the consumer's final flush.
+	if res.stopAnalytics != nil {
+		res.stopAnalytics()
 	}
 	if res.cron != nil {
 		res.cron.Stop()
