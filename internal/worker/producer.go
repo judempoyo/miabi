@@ -23,6 +23,12 @@ const (
 	// standalone `miabi worker` does not, and therefore never receives a
 	// remote-node task it couldn't reach.
 	QueueNode = "node"
+	// QueueControl carries tasks that drive the control plane's own service graph
+	// rather than a container: a portable workspace bundle creates apps, routes,
+	// databases and members through the very services the API server wires. A
+	// standalone `miabi worker` builds only the subset of that graph its container
+	// work needs, so it does not consume this queue — the embedded worker does.
+	QueueControl = "control"
 )
 
 // Task types.
@@ -38,6 +44,7 @@ const (
 	TypeVolumeBackup   = "volume:backup"
 	TypeRunPipeline    = "pipeline:run"
 	TypePlatformBackup = "platform:backup"
+	TypeWSBundle       = "workspace:bundle"
 )
 
 // DeployPayload identifies the deployment to process.
@@ -95,6 +102,14 @@ type VolumeBackupPayload struct {
 // RunPipelinePayload identifies the pipeline run to execute.
 type RunPipelinePayload struct {
 	PipelineRunID uint `json:"pipeline_run_id"`
+}
+
+// WorkspaceBundlePayload identifies the portable workspace bundle run to
+// execute. Only the row id travels: everything the run needs — the bucket, the
+// passphrase, what it targets — is read from the database when it starts, so no
+// secret is ever written to the queue.
+type WorkspaceBundlePayload struct {
+	WorkspaceBundleID uint `json:"workspace_bundle_id"`
 }
 
 // PlatformBackupPayload identifies the platform backup record to execute.
@@ -313,6 +328,21 @@ func (p *Producer) EnqueuePlatformBackup(backupID uint) error {
 		return err
 	}
 	task := asynq.NewTask(TypePlatformBackup, payload, asynq.Queue(QueueLow), asynq.MaxRetry(0))
+	_, err = p.client.Enqueue(task)
+	return err
+}
+
+// EnqueueWorkspaceBundle schedules a portable workspace bundle export or
+// restore. Never auto-retried: a restore replayed blindly after a partial run is
+// exactly the situation an operator wants to look at first. It drives the local
+// Docker socket and the control plane's own services, so it runs on the default
+// queue rather than a node queue.
+func (p *Producer) EnqueueWorkspaceBundle(bundleID uint) error {
+	payload, err := json.Marshal(WorkspaceBundlePayload{WorkspaceBundleID: bundleID})
+	if err != nil {
+		return err
+	}
+	task := asynq.NewTask(TypeWSBundle, payload, asynq.Queue(QueueControl), asynq.MaxRetry(0))
 	_, err = p.client.Enqueue(task)
 	return err
 }

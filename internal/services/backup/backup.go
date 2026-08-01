@@ -34,7 +34,9 @@ var (
 
 	// Backup tools name artifacts <db>_YYYYMMDD_...<ext>.gz: pg-bkup/mysql-bkup
 	// emit ".sql.gz", mongodb-bkup (mongodump --archive --gzip) emits ".archive.gz".
-	artifactRe = regexp.MustCompile(`[\w.\-]+\.(?:sql|archive)\.gz`)
+	// With GPG_PASSPHRASE set the tools append ".gpg"; without matching it the run
+	// would complete with an empty Filename and nothing to restore from.
+	artifactRe = regexp.MustCompile(`[\w.\-]+\.(?:sql|archive)\.gz(?:\.gpg)?`)
 )
 
 // ImageResolver resolves a deployment-config catalog key to an image ref.
@@ -148,6 +150,12 @@ type S3Config struct {
 type Destination struct {
 	Type string // "local" | "s3"
 	S3   *S3Config
+	// GPGPassphrase encrypts the artifact: the *-bkup tools write "<name>.gpg"
+	// when it is set, and decrypt transparently on restore with the same value.
+	// Used by portable workspace bundles, which protect every artifact they carry
+	// — dumps included — with the one passphrase that also seals the bundle's
+	// state file.
+	GPGPassphrase string
 }
 
 func workspaceBackupVolume(workspaceID uint) string {
@@ -223,6 +231,9 @@ func (s *Service) Run(ctx context.Context, inst *models.DatabaseInstance, db *mo
 	if err != nil {
 		return s.fail(b, err), nil
 	}
+	if dest.GPGPassphrase != "" {
+		env = append(env, "GPG_PASSPHRASE="+dest.GPGPassphrase)
+	}
 	cmd := []string{"backup", "-d", db.Name}
 	var mounts map[string]string
 
@@ -264,10 +275,19 @@ func (s *Service) Run(ctx context.Context, inst *models.DatabaseInstance, db *mo
 	})
 	b.Logs = out
 	if err != nil || exit != 0 {
-		return s.fail(b, fmt.Errorf("backup exited with code %d: %w", exit, err)), nil
+		// RunOneShot returns a nil error when the tool itself exits non-zero, so
+		// wrapping err alone reported "%!w(<nil>)" and threw away the only thing
+		// that explains the failure: the tool's own output.
+		return s.fail(b, oneShotFailure(exit, out, err)), nil
 	}
-	if m := artifactRe.FindString(out); m != "" {
-		b.Filename = m
+	name, encrypted, nameErr := ArtifactName(out, artifactRe)
+	if nameErr != nil {
+		return s.fail(b, nameErr), nil
+	}
+	b.Filename = name
+	if dest.GPGPassphrase != "" && !encrypted {
+		logger.Warn("backup stored UNENCRYPTED despite a passphrase being supplied: the backup tool does not support encryption — upgrade the image",
+			"database", db.Name, "artifact", name)
 	}
 	fin := time.Now()
 	b.Status = models.BackupCompleted
@@ -360,6 +380,8 @@ type RestoreSpec struct {
 	S3          *S3Config
 	S3Path      string // remote folder prefix the artifact was stored under
 	Force       bool
+	// GPGPassphrase decrypts a ".gpg" artifact (see Destination.GPGPassphrase).
+	GPGPassphrase string
 }
 
 // RestoreFromBackup restores a logical database from a stored backup record. For
@@ -403,6 +425,9 @@ func (s *Service) Restore(ctx context.Context, inst *models.DatabaseInstance, db
 	env, err := s.connEnv(inst, db)
 	if err != nil {
 		return err
+	}
+	if spec.GPGPassphrase != "" {
+		env = append(env, "GPG_PASSPHRASE="+spec.GPGPassphrase)
 	}
 	cmd := []string{"restore", "-d", db.Name, "-f", spec.Filename}
 	var mounts map[string]string
@@ -550,6 +575,48 @@ func (s *Service) connEnv(inst *models.DatabaseInstance, db *models.Database) ([
 		"DB_USERNAME=" + db.Username,
 		"DB_PASSWORD=" + pass,
 	}, nil
+}
+
+// ArtifactName extracts the artifact the helper actually uploaded from its
+// output, and reports whether it is encrypted.
+//
+// It takes the LAST match, not the first. With encryption on, the tools narrate
+// the plain dump before the encrypted one they upload:
+//
+//	Backup file created: appdb_20240601.sql.gz
+//	Encrypting backup file appdb_20240601.sql.gz.gpg
+//	Uploading ... appdb_20240601.sql.gz.gpg
+//
+// Taking the first match recorded a name for a file that was never written: the
+// row looked complete, and the object it pointed at did not exist. That is only
+// discovered by verifying the backup — or by needing it.
+//
+// Encryption is read off the name rather than off the request, because a helper
+// image too old to support it ignores the passphrase and writes plaintext. What
+// is in the bucket is the fact; the caller warns when it falls short of what was
+// asked for.
+func ArtifactName(out string, re *regexp.Regexp) (name string, encrypted bool, err error) {
+	matches := re.FindAllString(out, -1)
+	if len(matches) == 0 {
+		return "", false, fmt.Errorf("the backup reported success but named no artifact; output: %s", strings.TrimSpace(out))
+	}
+	name = matches[len(matches)-1]
+	return name, strings.HasSuffix(name, ".gpg"), nil
+}
+
+// oneShotFailure formats a backup helper's failure around its output.
+func oneShotFailure(exit int, out string, err error) error {
+	detail := strings.TrimSpace(out)
+	if detail == "" {
+		detail = "(no output)"
+	}
+	if len(detail) > 2000 {
+		detail = "…" + detail[len(detail)-2000:]
+	}
+	if err != nil {
+		return fmt.Errorf("backup could not run: %w (output: %s)", err, detail)
+	}
+	return fmt.Errorf("backup exited with code %d: %s", exit, detail)
 }
 
 func (s *Service) fail(b *models.Backup, cause error) *models.Backup {

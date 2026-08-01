@@ -6,17 +6,19 @@ package worker
 import "github.com/hibiken/asynq"
 
 // NewServer builds an asynq server with Miabi's queue priorities.
-// consumeNodeQueue must be true only for the control-plane server's embedded
-// worker (which holds the agent tunnels); a standalone worker passes false so it
-// never picks up a remote-node task it cannot reach.
-func NewServer(redisAddr, redisPassword string, redisDB, concurrency int, consumeNodeQueue bool) *asynq.Server {
+// embedded must be true only for the control-plane server's embedded worker: it
+// is the one that holds the agent tunnels (QueueNode) and the one with the
+// platform's full service graph (QueueControl). A standalone worker passes false
+// and so never picks up a task it could not carry out.
+func NewServer(redisAddr, redisPassword string, redisDB, concurrency int, embedded bool) *asynq.Server {
 	queues := map[string]int{
 		QueueDeploy:  6,
 		QueueDefault: 3,
 		QueueLow:     1,
 	}
-	if consumeNodeQueue {
+	if embedded {
 		queues[QueueNode] = 6
+		queues[QueueControl] = 3
 	}
 	return asynq.NewServer(
 		asynq.RedisClientOpt{Addr: redisAddr, Password: redisPassword, DB: redisDB},
@@ -28,7 +30,7 @@ func NewServer(redisAddr, redisPassword string, redisDB, concurrency int, consum
 }
 
 // NewMux registers task handlers and returns the asynq mux.
-func NewMux(deploy *DeployHandler, provision *ProvisionDBHandler, upgrade *UpgradeDBHandler, fanout *FanoutHandler, webhook *WebhookDeliverHandler, channel *ChannelSendHandler, job *JobHandler, volumeBackup *VolumeBackupHandler, pipeline *PipelineHandler, platformBackup *PlatformBackupHandler) *asynq.ServeMux {
+func NewMux(deploy *DeployHandler, provision *ProvisionDBHandler, upgrade *UpgradeDBHandler, fanout *FanoutHandler, webhook *WebhookDeliverHandler, channel *ChannelSendHandler, job *JobHandler, volumeBackup *VolumeBackupHandler, pipeline *PipelineHandler, platformBackup *PlatformBackupHandler, wsBundle *WorkspaceBundleHandler) *asynq.ServeMux {
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(TypeDeploy, deploy.ProcessTask)
 	mux.HandleFunc(TypeCanaryStep, deploy.ProcessCanaryStep)
@@ -41,5 +43,11 @@ func NewMux(deploy *DeployHandler, provision *ProvisionDBHandler, upgrade *Upgra
 	mux.HandleFunc(TypeVolumeBackup, volumeBackup.ProcessTask)
 	mux.HandleFunc(TypeRunPipeline, pipeline.ProcessTask)
 	mux.HandleFunc(TypePlatformBackup, platformBackup.ProcessTask)
+	// Portable workspace bundles run only where the full service graph exists, so
+	// a standalone worker passes nil here and leaves TypeWSBundle unregistered —
+	// its server does not consume QueueControl either, so nothing is stranded.
+	if wsBundle != nil {
+		mux.HandleFunc(TypeWSBundle, wsBundle.ProcessTask)
+	}
 	return mux
 }

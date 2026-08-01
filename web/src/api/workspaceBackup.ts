@@ -13,13 +13,15 @@ export interface BackupSettings {
   s3_force_path_style: boolean
   database_backup_path?: string
   volume_backup_path?: string
+  bundle_path?: string
   s3_secret_set: boolean
+  bundle_passphrase_set: boolean
   created_at?: string
   updated_at?: string
 }
 
-// UpdateBackupSettingsInput mirrors the backend body. Leave s3_secret_key empty
-// to keep the stored secret unchanged.
+// UpdateBackupSettingsInput mirrors the backend body. Leave s3_secret_key or
+// bundle_passphrase empty to keep the stored value unchanged.
 export interface UpdateBackupSettingsInput {
   s3_enabled: boolean
   s3_endpoint: string
@@ -31,6 +33,23 @@ export interface UpdateBackupSettingsInput {
   s3_force_path_style: boolean
   database_backup_path: string
   volume_backup_path: string
+  bundle_path: string
+  bundle_passphrase: string
+}
+
+// One prefix's result from a connection test: the probe wrote a small object
+// there, read it back and tried to remove it.
+export interface BackupPrefixCheck {
+  prefix: string
+  key?: string
+  removed: boolean
+  error?: string
+}
+
+export interface BackupTestResult {
+  ok: boolean
+  message: string
+  checks: BackupPrefixCheck[]
 }
 
 export const workspaceBackupApi = {
@@ -41,6 +60,6 @@ export const workspaceBackupApi = {
     return api.put<ApiResponse<BackupSettings>>(`/workspaces/${workspaceId}/backup-settings`, input)
   },
   test(workspaceId: number, input: UpdateBackupSettingsInput) {
-    return api.post<ApiResponse<{ message: string }>>(`/workspaces/${workspaceId}/backup-settings/test`, input)
+    return api.post<ApiResponse<BackupTestResult>>(`/workspaces/${workspaceId}/backup-settings/test`, input)
   },
 }

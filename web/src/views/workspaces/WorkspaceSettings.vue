@@ -5,11 +5,12 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { useNotificationStore } from '@/stores/notification'
 import { workspaceApi, type DeletionJob } from '@/api/workspaces'
 import { memberApi, usageApi } from '@/api/resources'
-import { workspaceBackupApi, type UpdateBackupSettingsInput } from '@/api/workspaceBackup'
+import { workspaceBackupApi, type UpdateBackupSettingsInput, type BackupTestResult } from '@/api/workspaceBackup'
 import type { Member, Invitation, WorkspaceRole, WorkspaceUsage, WorkspaceLiveSample, CustomRole } from '@/api/types'
 import { roleApi } from '@/api/rbac'
 import NotificationChannels from '@/views/notifications/Notifications.vue'
 import WorkspaceRolesPanel from '@/components/WorkspaceRolesPanel.vue'
+import PortableBackupPanel from '@/components/PortableBackupPanel.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import Sparkline from '@/components/Sparkline.vue'
 import { copyText } from '@/utils/clipboard'
@@ -20,13 +21,14 @@ const ws = useWorkspaceStore()
 const notify = useNotificationStore()
 
 const roles: WorkspaceRole[] = ['owner', 'admin', 'developer', 'viewer']
-type Tab = 'settings' | 'members' | 'roles' | 'usage' | 'backup' | 'notifications'
+type Tab = 'settings' | 'members' | 'roles' | 'usage' | 'backup' | 'portability' | 'notifications'
 const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: 'settings', label: 'General', icon: 'mdi-cog-outline' },
   { id: 'members', label: 'Members', icon: 'mdi-account-group-outline' },
   { id: 'roles', label: 'Roles', icon: 'mdi-shield-account-outline' },
   { id: 'usage', label: 'Usage', icon: 'mdi-gauge' },
   { id: 'backup', label: 'Backup', icon: 'mdi-cloud-upload-outline' },
+  { id: 'portability', label: 'Portability', icon: 'mdi-package-variant-closed' },
   { id: 'notifications', label: 'Notifications', icon: 'mdi-bell-outline' },
 ]
 
@@ -171,8 +173,14 @@ const backup = ref<UpdateBackupSettingsInput>({
   s3_force_path_style: false,
   database_backup_path: '',
   volume_backup_path: '',
+  bundle_path: '',
+  bundle_passphrase: '',
 })
 const backupSecretSet = ref(false)
+const bundlePassphraseSet = ref(false)
+// The last connection test's result, kept on screen: it names each prefix it
+// wrote to, which is the detail that makes a failure actionable.
+const backupTest = ref<BackupTestResult | null>(null)
 const savingBackup = ref(false)
 const testingBackup = ref(false)
 
@@ -191,8 +199,11 @@ async function loadBackup() {
       s3_force_path_style: s.s3_force_path_style,
       database_backup_path: s.database_backup_path ?? '',
       volume_backup_path: s.volume_backup_path ?? '',
+      bundle_path: s.bundle_path ?? '',
+      bundle_passphrase: '', // never returned; left blank keeps the stored one
     }
     backupSecretSet.value = s.s3_secret_set
+    bundlePassphraseSet.value = s.bundle_passphrase_set
   } catch (e) {
     notify.apiError(e)
   }
@@ -208,7 +219,9 @@ async function saveBackup() {
   try {
     const s = (await workspaceBackupApi.update(wsId.value, backup.value)).data.data
     backupSecretSet.value = s.s3_secret_set
+    bundlePassphraseSet.value = s.bundle_passphrase_set
     backup.value.s3_secret_key = ''
+    backup.value.bundle_passphrase = ''
     notify.success('Backup settings saved')
   } catch (e) {
     notify.apiError(e)
@@ -220,9 +233,12 @@ async function saveBackup() {
 async function testBackup() {
   if (!isAdmin.value) return
   testingBackup.value = true
+  backupTest.value = null
   try {
     const res = (await workspaceBackupApi.test(wsId.value, backup.value)).data.data
-    notify.success(res.message || 'Backup settings look valid')
+    backupTest.value = res
+    if (res.ok) notify.success(res.message)
+    else notify.error(res.message)
   } catch (e) {
     notify.apiError(e)
   } finally {
@@ -770,6 +786,29 @@ watch(activeTab, (t) => loadTab(t))
               </div>
             </div>
 
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label">Bundle path <span class="text-muted">(portable backups)</span></label>
+                <input v-model="backup.bundle_path" class="form-input" placeholder="bundles" aria-label="Bundle path" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Bundle passphrase</label>
+                <input
+                  v-model="backup.bundle_passphrase"
+                  class="form-input"
+                  type="password"
+                  autocomplete="new-password"
+                  :placeholder="bundlePassphraseSet ? '\u2022\u2022\u2022\u2022\u2022 (set \u2014 leave blank to keep)' : 'at least 12 characters'"
+                  aria-label="Bundle passphrase"
+                />
+                <p class="text-muted text-sm" style="margin: 6px 0 0">
+                  Seals a portable bundle's secrets and encrypts its dumps. Record it outside Miabi:
+                  it is the only thing that opens a bundle on another install \u2014 including one
+                  rebuilt after losing this one.
+                </p>
+              </div>
+            </div>
+
             <div class="toggle-list">
               <label class="toggle-row">
                 <input v-model="backup.s3_use_ssl" type="checkbox" />
@@ -790,8 +829,36 @@ watch(activeTab, (t) => loadTab(t))
               {{ testingBackup ? 'Testing…' : 'Test connection' }}
             </button>
           </div>
+
+          <!-- What the test actually did, per prefix. A connection test that only
+               says "looks valid" is the one nobody can act on. -->
+          <div v-if="backupTest" class="test-result" :class="backupTest.ok ? 'test-ok' : 'test-failed'">
+            <p class="test-headline">
+              <span class="mdi" :class="backupTest.ok ? 'mdi-check-circle-outline' : 'mdi-alert-circle-outline'"></span>
+              {{ backupTest.message }}
+            </p>
+            <ul class="test-checks">
+              <li v-for="c in backupTest.checks" :key="c.prefix">
+                <span class="mdi" :class="c.error ? 'mdi-close' : 'mdi-check'"></span>
+                <code>{{ c.prefix || '(bucket root)' }}</code>
+                <span v-if="c.error" class="text-muted"> — {{ c.error }}</span>
+                <span v-else-if="!c.removed" class="text-muted"> — written and read back, but not deletable</span>
+                <span v-else class="text-muted"> — written, read back and removed</span>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
+    </template>
+
+    <!-- Portability (export/restore the whole workspace as a bundle) -->
+    <template v-else-if="activeTab === 'portability'">
+      <div v-if="!isAdmin" class="card">
+        <div class="card-body">
+          <p class="text-muted text-sm">You need admin access to export or restore this workspace.</p>
+        </div>
+      </div>
+      <PortableBackupPanel v-else :ws-id="wsId" :can-restore="myRole === 'owner'" />
     </template>
 
     <!-- Notifications (Telegram channels) -->
@@ -931,6 +998,43 @@ watch(activeTab, (t) => loadTab(t))
   display: flex;
   gap: 10px;
   margin-top: 20px;
+}
+.test-result {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-tertiary);
+  font-size: 13px;
+}
+.test-result.test-failed {
+  border-color: var(--danger-500, var(--danger-600));
+}
+.test-headline {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+.test-ok .test-headline .mdi {
+  color: var(--success-500, var(--primary-500));
+}
+.test-failed .test-headline .mdi {
+  color: var(--danger-500, var(--danger-600));
+}
+.test-checks {
+  margin: 10px 0 0;
+  padding-left: 4px;
+  list-style: none;
+}
+.test-checks li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.test-checks code {
+  font-size: 12px;
 }
 .meter { margin-bottom: 16px; }
 .meter-head { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
