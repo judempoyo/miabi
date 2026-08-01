@@ -93,6 +93,18 @@ export interface AnalyticsReport {
   exportable: boolean
 }
 
+// AnalyticsSummary is the dashboard's slice of a report: headline totals, the
+// status split and the request series, without the categorical breakdowns,
+// per-route stats or upstream percentiles the analytics pages need.
+export interface AnalyticsSummary {
+  range: { since: string; until: string }
+  granularity: 'minute' | 'hour' | 'day'
+  totals: AnalyticsTotals
+  series: AnalyticsSeriesPoint[]
+  status: AnalyticsStatus
+  compare?: AnalyticsTotals
+}
+
 // Distinct visitors seen within the live window (server-defined, ~5 minutes).
 export interface LiveVisitors {
   visitors: number
@@ -110,6 +122,12 @@ export const analyticsApi = {
   apps: (ws: number, range: string) =>
     api.get<ApiResponse<{ application_ids: number[] }>>(`${w(ws)}/analytics/apps`, {
       params: { range },
+    }),
+  // The dashboard's traffic card. Same numbers as `report` for the fields it
+  // shares, but the server neither computes nor reads the breakdowns.
+  summary: (ws: number, range: string, app?: number) =>
+    api.get<ApiResponse<AnalyticsSummary>>(`${w(ws)}/analytics/summary`, {
+      params: { range, ...(app ? { app } : {}) },
     }),
   // Visitors active in the last few minutes. Independent of `range` — it's a
   // "right now" number, polled while the dashboard is open.

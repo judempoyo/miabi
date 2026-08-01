@@ -10,10 +10,14 @@ import type { AnalyticsSeriesPoint } from '@/api/analytics'
 import { fmtNum, fmtMs, niceAxisMax } from './format'
 import { buildTicks, bucketLabel, type Granularity } from './timeaxis'
 
-const props = defineProps<{
-  series: AnalyticsSeriesPoint[]
-  granularity: Granularity
-}>()
+const props = withDefaults(
+  defineProps<{
+    series: AnalyticsSeriesPoint[]
+    granularity: Granularity
+    height?: number
+  }>(),
+  { height: 200 },
+)
 
 const plot = ref<HTMLElement | null>(null)
 const width = ref(720)
@@ -111,7 +115,9 @@ const summary = computed(
 
 <template>
   <div class="rc">
-    <div class="rc-frame">
+    <!-- Height rides a custom property rather than grid-template-rows directly,
+         so the narrow-screen clamp below still wins over the prop. -->
+    <div class="rc-frame" :style="{ '--rc-height': height + 'px' }">
       <div class="rc-yaxis">
         <span v-for="t in yTicks" :key="t.f" class="rc-ylabel" :style="{ bottom: t.pct + '%' }">{{ t.label }}</span>
       </div>
@@ -193,7 +199,7 @@ const summary = computed(
 
 <style scoped>
 /* y labels | plot, with the x axis under the plot only. */
-.rc-frame { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 200px auto; column-gap: 8px; }
+.rc-frame { display: grid; grid-template-columns: auto 1fr; grid-template-rows: var(--rc-height, 200px) auto; column-gap: 8px; }
 
 .rc-yaxis { position: relative; width: 38px; }
 .rc-ylabel {
@@ -252,6 +258,6 @@ const summary = computed(
 .k-5xx { background: var(--chart-5xx); }
 
 @media (max-width: 639px) {
-  .rc-frame { grid-template-rows: 160px auto; }
+  .rc-frame { grid-template-rows: min(var(--rc-height, 200px), 160px) auto; }
 }
 </style>
