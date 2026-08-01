@@ -220,8 +220,8 @@ const summary = computed(
 /* 2px of card surface separates touching segments — no strokes. */
 .rc-bar.gap { margin-bottom: 2px; }
 .b-ok { background: var(--primary-500); }
-.b-4xx { background: var(--warning-600); }
-.b-5xx { background: var(--danger-500); }
+.b-4xx { background: var(--chart-4xx); }
+.b-5xx { background: var(--chart-5xx); }
 /* A bucket with no traffic keeps a baseline mark, so "zero" never reads as "missing". */
 .rc-zero { height: 2px; background: var(--border-primary); border-radius: 1px; }
 
@@ -248,8 +248,8 @@ const summary = computed(
 .rc-tip-foot.no-top { margin-top: 0; padding-top: 0; border-top: none; }
 .k { width: 10px; height: 2px; border-radius: 1px; flex: 0 0 auto; }
 .k-ok { background: var(--primary-500); }
-.k-4xx { background: var(--warning-600); }
-.k-5xx { background: var(--danger-500); }
+.k-4xx { background: var(--chart-4xx); }
+.k-5xx { background: var(--chart-5xx); }
 
 @media (max-width: 639px) {
   .rc-frame { grid-template-rows: 160px auto; }
