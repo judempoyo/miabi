@@ -26,6 +26,19 @@ export function fmtPct(frac: number): string {
   return (frac * 100).toFixed(frac >= 0.1 || frac === 0 ? 1 : 2) + '%'
 }
 
+// niceAxisMax rounds a series peak up to a round axis top. The candidates are
+// all even multiples so the halfway gridline is a round number too — a 2.5k axis
+// would label its midpoint "1.3k", which reads as a rounding bug.
+export function niceAxisMax(peak: number): number {
+  if (peak <= 0) return 1
+  if (peak < 10) return Math.max(2, Math.ceil(peak / 2) * 2)
+  const mag = 10 ** Math.floor(Math.log10(peak))
+  for (const m of [1, 2, 3, 4, 6, 8]) {
+    if (peak <= m * mag) return m * mag
+  }
+  return 10 * mag
+}
+
 // delta returns the signed relative change from prev to cur (e.g. 0.12 = +12%),
 // or null when there's no comparable baseline.
 export function delta(cur: number, prev: number | undefined): number | null {

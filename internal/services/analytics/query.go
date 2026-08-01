@@ -120,19 +120,21 @@ type Category struct {
 // truncFunc truncates a bucket timestamp to the report granularity.
 type truncFunc func(time.Time) time.Time
 
-// granularityFor picks a sensible bucket size for the range span so the series
-// stays readable: minute up to ~3h, hour up to ~4d, day beyond.
-func granularityFor(span time.Duration) (string, truncFunc) {
+// maxSeriesPoints bounds the emitted series regardless of the window, so a wide
+// range can never blow up the response.
+const maxSeriesPoints = 1500
+
+func granularityFor(span time.Duration) (string, truncFunc, time.Duration) {
 	switch {
 	case span <= 3*time.Hour:
-		return "minute", func(t time.Time) time.Time { return t.Truncate(time.Minute) }
+		return "minute", func(t time.Time) time.Time { return t.Truncate(time.Minute) }, time.Minute
 	case span <= 4*24*time.Hour:
-		return "hour", func(t time.Time) time.Time { return t.Truncate(time.Hour) }
+		return "hour", func(t time.Time) time.Time { return t.Truncate(time.Hour) }, time.Hour
 	default:
 		return "day", func(t time.Time) time.Time {
 			y, m, d := t.UTC().Date()
 			return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-		}
+		}, 24 * time.Hour
 	}
 }
 
@@ -149,7 +151,7 @@ type seriesAgg struct {
 // pass for the totals/status/web breakdowns and a grouped pass for the series,
 // merging latency histograms for percentiles and HLL sketches for uniques.
 func BuildReport(rows []models.AnalyticsRollup, since, until time.Time) Report {
-	gran, trunc := granularityFor(until.Sub(since))
+	gran, trunc, step := granularityFor(until.Sub(since))
 	rep := Report{
 		Range:       Window{Since: since, Until: until},
 		Granularity: gran,
@@ -274,28 +276,21 @@ func BuildReport(rows []models.AnalyticsRollup, since, until time.Time) Report {
 		TopMethods:     topN(methods, 10),
 	}
 
-	// Series, ordered by time and filled for the mean/p95.
-	keys := make([]int64, 0, len(series))
-	for k := range series {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	rep.Series = make([]SeriesPoint, 0, len(keys))
-	for _, k := range keys {
-		sp := series[k]
-		pt := SeriesPoint{
-			T:          time.Unix(k, 0).UTC(),
-			Requests:   sp.requests,
-			BytesIn:    sp.bytesIn,
-			BytesOut:   sp.bytesOut,
-			Errors:     sp.errors,
-			Errors4xx:  sp.errors4xx,
-			Errors5xx:  sp.errors5xx,
-			Uniques:    MergeUniques(sp.sketches),
-			P95Latency: Percentile(sp.durHist, 0.95),
-		}
-		if sp.requests > 0 {
-			pt.AvgLatency = float64(sp.durSum) / float64(sp.requests)
+	rep.Series = make([]SeriesPoint, 0, len(series)+1)
+	for t := trunc(since); !t.After(trunc(until)) && len(rep.Series) < maxSeriesPoints; t = t.Add(step) {
+		pt := SeriesPoint{T: t.UTC()}
+		if sp := series[t.Unix()]; sp != nil {
+			pt.Requests = sp.requests
+			pt.BytesIn = sp.bytesIn
+			pt.BytesOut = sp.bytesOut
+			pt.Errors = sp.errors
+			pt.Errors4xx = sp.errors4xx
+			pt.Errors5xx = sp.errors5xx
+			pt.Uniques = MergeUniques(sp.sketches)
+			pt.P95Latency = Percentile(sp.durHist, 0.95)
+			if sp.requests > 0 {
+				pt.AvgLatency = float64(sp.durSum) / float64(sp.requests)
+			}
 		}
 		rep.Series = append(rep.Series, pt)
 	}

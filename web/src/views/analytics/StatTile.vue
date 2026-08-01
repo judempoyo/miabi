@@ -30,6 +30,7 @@ const dir = computed(() => {
         v-if="delta !== null && delta !== undefined && dir !== 'flat'"
         class="a-delta"
         :class="[dir, { invert }]"
+        title="Change vs the previous period of the same length"
       >{{ fmtDelta(delta) }}</span>
     </div>
     <div v-if="$slots.sub || sub" class="t-sub"><slot name="sub">{{ sub }}</slot></div>

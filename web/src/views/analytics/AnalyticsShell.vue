@@ -31,6 +31,14 @@ const { report, loading, error } = storeToRefs(store)
       </div>
     </div>
 
-    <slot v-else-if="report" :report="report" />
+    <!-- A refetch (range or app change) keeps the previous render in place, just
+         dimmed — no skeleton, no layout jump. -->
+    <div v-else-if="report" :class="{ 'a-refreshing': loading }">
+      <slot :report="report" />
+    </div>
   </div>
 </template>
+
+<style scoped>
+.a-refreshing { opacity: 0.55; transition: opacity 0.15s; pointer-events: none; }
+</style>

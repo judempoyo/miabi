@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/miabi-io/miabi/internal/models"
 )
 
 func TestWorkspaceIDFromRoute(t *testing.T) {
@@ -147,5 +149,41 @@ func TestAggregatorIngestFlushAndMerge(t *testing.T) {
 	// Range-uniques via MergeUniques over both sketches.
 	if u := MergeUniques([][]byte{rows[0].VisitorsHLL, rows2[0].VisitorsHLL}); u < 1 {
 		t.Fatalf("MergeUniques returned %d", u)
+	}
+}
+
+// The series must cover every bucket in the window, including the quiet ones:
+// the charts plot it against a time axis, so a skipped bucket would silently
+// shift every later column (and every axis label) to the wrong time.
+func TestBuildReportFillsEmptyBuckets(t *testing.T) {
+	until := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	since := until.Add(-24 * time.Hour)
+	// Traffic in exactly two hours of the window, 5 hours apart.
+	rows := []models.AnalyticsRollup{
+		{Bucket: until.Add(-20 * time.Hour), Requests: 10, Status2xx: 8, Status4xx: 1, Status5xx: 1},
+		{Bucket: until.Add(-15 * time.Hour), Requests: 4, Status2xx: 4},
+	}
+	rep := BuildReport(rows, since, until)
+
+	if rep.Granularity != "hour" {
+		t.Fatalf("granularity = %q, want hour", rep.Granularity)
+	}
+	if len(rep.Series) != 25 { // 24 whole hours, inclusive of both truncated ends
+		t.Fatalf("series length = %d, want 25", len(rep.Series))
+	}
+	for i, p := range rep.Series {
+		if want := since.Truncate(time.Hour).Add(time.Duration(i) * time.Hour); !p.T.Equal(want) {
+			t.Fatalf("series[%d].T = %v, want %v", i, p.T, want)
+		}
+	}
+	var nonEmpty, total int64
+	for _, p := range rep.Series {
+		if p.Requests > 0 {
+			nonEmpty++
+		}
+		total += p.Requests
+	}
+	if nonEmpty != 2 || total != 14 {
+		t.Fatalf("non-empty buckets = %d (want 2), total requests = %d (want 14)", nonEmpty, total)
 	}
 }
