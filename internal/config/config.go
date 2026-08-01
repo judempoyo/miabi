@@ -160,6 +160,13 @@ type Config struct {
 	AnalyticsFlushSeconds int
 	// AnalyticsRetentionDays bounds how long rollups are kept before pruning.
 	AnalyticsRetentionDays int
+	// AnalyticsLiveWindowSeconds is how long a visitor keeps counting as "live"
+	// after their last request. It spans the gap between one visitor's requests,
+	// not the length of their visit — someone reading a page sends nothing for
+	// minutes and is still there, which is why 5m is the norm. Keep it in step
+	// with the gateway's monitoring.visitorTTL, or the dashboard's live count and
+	// Goma's Prometheus gauge will disagree.
+	AnalyticsLiveWindowSeconds int
 
 	// ACMEDirectoryURL is the ACME CA directory Miabi issues managed (DNS-01)
 	// certificates from. Empty = Let's Encrypt production. Point it at the LE
@@ -541,6 +548,7 @@ func New() *Config {
 		AnalyticsStream:            goutils.Env("MIABI_ANALYTICS_STREAM", "goma:analytics"),
 		AnalyticsFlushSeconds:      goutils.EnvInt("MIABI_ANALYTICS_FLUSH_SECONDS", 15),
 		AnalyticsRetentionDays:     goutils.EnvInt("MIABI_ANALYTICS_RETENTION_DAYS", 90),
+		AnalyticsLiveWindowSeconds: goutils.EnvInt("MIABI_ANALYTICS_LIVE_WINDOW_SECONDS", 300),
 		ACMEDirectoryURL:           goutils.Env("MIABI_ACME_DIRECTORY_URL", ""),
 		CertRenewDays:              goutils.EnvInt("MIABI_CERT_RENEW_DAYS", 30),
 		KeyAutoRotate:              goutils.EnvBool("MIABI_KEY_AUTO_ROTATE", false),

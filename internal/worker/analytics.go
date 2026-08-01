@@ -33,10 +33,14 @@ const (
 // interval. It resolves each event's workspace from the route name and its app
 // from a cached route→app map. Holds no per-request rows and no PII.
 type AnalyticsConsumer struct {
-	rdb      *redis.Client
-	routes   *repositories.RouteRepository
-	store    *repositories.AnalyticsRepository
-	agg      *analytics.Aggregator
+	rdb    *redis.Client
+	routes *repositories.RouteRepository
+	store  *repositories.AnalyticsRepository
+	agg    *analytics.Aggregator
+	// live counts visitors active in the last few minutes, straight off the
+	// stream — the rollups can't answer it, since a bucket isn't written until
+	// its minute closes and the grace period passes.
+	live     *analytics.LiveTracker
 	stream   string
 	consumer string
 
@@ -53,13 +57,19 @@ type AnalyticsConsumer struct {
 
 // NewAnalyticsConsumer wires the consumer. consumer is this worker's unique name
 // within the group (so pending-message ownership is per-worker). retentionDays is
-// evaluated on each prune; nil disables pruning (keep forever).
-func NewAnalyticsConsumer(rdb *redis.Client, routes *repositories.RouteRepository, store *repositories.AnalyticsRepository, stream, consumer string, flushEvery time.Duration, retentionDays func() int) *AnalyticsConsumer {
+// evaluated on each prune; nil disables pruning (keep forever). live is the
+// tracker the API reads from — passed in rather than built here so the window is
+// configured once, at the call site that owns it.
+func NewAnalyticsConsumer(rdb *redis.Client, routes *repositories.RouteRepository, store *repositories.AnalyticsRepository, stream, consumer string, flushEvery time.Duration, retentionDays func() int, live *analytics.LiveTracker) *AnalyticsConsumer {
 	if flushEvery <= 0 {
 		flushEvery = 15 * time.Second
 	}
+	if live == nil {
+		live = analytics.NewLiveTracker(rdb, analytics.DefaultLiveWindow)
+	}
 	return &AnalyticsConsumer{
 		rdb: rdb, routes: routes, store: store, agg: analytics.NewAggregator(),
+		live:   live,
 		stream: stream, consumer: consumer,
 		flushEvery: flushEvery, retentionDays: retentionDays,
 		routeMap: map[string]uint{},
@@ -102,12 +112,17 @@ func (c *AnalyticsConsumer) Run(ctx context.Context) {
 			continue
 		}
 		var ids []string
+		var visits []analytics.LiveVisit
 		for _, stream := range res {
 			for _, msg := range stream.Messages {
-				c.ingestMessage(msg)
+				if v, ok := c.ingestMessage(msg); ok {
+					visits = append(visits, v)
+				}
 				ids = append(ids, msg.ID)
 			}
 		}
+		// One write per stream read rather than one per event.
+		c.live.Touch(ctx, visits)
 		if len(ids) > 0 {
 			// Ack in-memory-accepted events; buckets persist on the flush ticker.
 			if err := c.rdb.XAck(ctx, c.stream, analyticsGroup, ids...).Err(); err != nil {
@@ -128,24 +143,33 @@ func (c *AnalyticsConsumer) ensureGroup(ctx context.Context) error {
 }
 
 // ingestMessage parses one stream message and folds it into the aggregator.
-func (c *AnalyticsConsumer) ingestMessage(msg redis.XMessage) {
+// ingestMessage rolls one event into its bucket and reports the visitor sighting
+// the caller should record, if the event counts towards live visitors.
+func (c *AnalyticsConsumer) ingestMessage(msg redis.XMessage) (analytics.LiveVisit, bool) {
 	raw, ok := msg.Values["e"].(string)
 	if !ok || raw == "" {
-		return
+		return analytics.LiveVisit{}, false
 	}
 	var e analytics.Event
 	if err := json.Unmarshal([]byte(raw), &e); err != nil {
-		return
+		return analytics.LiveVisit{}, false
 	}
 	if e.Route == "" {
-		return
+		return analytics.LiveVisit{}, false
 	}
 	ws := analytics.WorkspaceIDFromRoute(e.Route)
 	if ws == 0 {
-		return // not a workspace route (e.g. the platform gateway's own route)
+		return analytics.LiveVisit{}, false // not a workspace route (e.g. the platform gateway's own)
 	}
 	app := c.appFor(e.Route)
 	c.agg.Ingest(&e, ws, app)
+
+	// Live visitors counts people, so automated traffic is left out — a crawler
+	// sweeping the site shouldn't read as an audience.
+	if e.VID == "" || analytics.IsBotUA(e.UA) {
+		return analytics.LiveVisit{}, false
+	}
+	return analytics.LiveVisit{Workspace: ws, App: app, VID: e.VID}, true
 }
 
 // appFor resolves a Goma route name to its application id via a short-lived cache
@@ -188,6 +212,9 @@ func (c *AnalyticsConsumer) flushLoop(ctx context.Context) {
 			return
 		case <-flush.C:
 			c.flush(ctx)
+			// Live counts are already window-correct on read; this just keeps the
+			// visitor sets from holding everyone who ever visited.
+			c.live.Sweep(ctx)
 		case <-prune.C:
 			c.prune(ctx)
 		}

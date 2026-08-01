@@ -93,6 +93,12 @@ export interface AnalyticsReport {
   exportable: boolean
 }
 
+// Distinct visitors seen within the live window (server-defined, ~5 minutes).
+export interface LiveVisitors {
+  visitors: number
+  window_seconds: number
+}
+
 // Workspace Analytics: HTTP traffic, performance and web analytics rolled up
 // from the gateway's request stream. `range` is a window ending now
 // (15m, 1h, 24h, 7d, 30d); `app` filters to a single application.
@@ -104,6 +110,12 @@ export const analyticsApi = {
   apps: (ws: number, range: string) =>
     api.get<ApiResponse<{ application_ids: number[] }>>(`${w(ws)}/analytics/apps`, {
       params: { range },
+    }),
+  // Visitors active in the last few minutes. Independent of `range` — it's a
+  // "right now" number, polled while the dashboard is open.
+  live: (ws: number, app?: number) =>
+    api.get<ApiResponse<LiveVisitors>>(`${w(ws)}/analytics/live`, {
+      params: { ...(app ? { app } : {}) },
     }),
   // CSV export (Enterprise-gated server-side). Returns the relative API path so
   // the caller can open it as a download.

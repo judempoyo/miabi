@@ -5,6 +5,7 @@ package analytics
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,8 +92,10 @@ func TestAggregatorIngestFlushAndMerge(t *testing.T) {
 
 	mk := func(status int, dur int64, vid, path string) *Event {
 		return &Event{
+			// No PathTemplate: the gateway has no per-request patterns, so real
+			// events carry only the request path.
 			Ts: base, Route: "mb-ws9-shop", Method: "GET", Status: status,
-			Path: path, PathTemplate: path, ReqBytes: 100, RespBytes: 2000,
+			Path: path, ReqBytes: 100, RespBytes: 2000,
 			DurationMs: dur, UpstreamMs: dur - 2, VID: vid, Country: "US",
 			UA: "Mozilla/5.0 Chrome/120", RefererHost: "google.com",
 		}
@@ -185,5 +188,58 @@ func TestBuildReportFillsEmptyBuckets(t *testing.T) {
 	}
 	if nonEmpty != 2 || total != 14 {
 		t.Fatalf("non-empty buckets = %d (want 2), total requests = %d (want 14)", nonEmpty, total)
+	}
+}
+
+// Top paths is keyed on the request path, so distinct paths stay distinct. The
+// gateway used to send its route mount prefix as PathTemplate — "/" for most
+// routes — and since a template wins over the raw path, every request in a route
+// collapsed into a single "/" row.
+func TestIngestKeysPathsOnRequestPath(t *testing.T) {
+	a := NewAggregator()
+	base := time.Date(2026, 7, 18, 10, 30, 0, 0, time.UTC).UnixMilli()
+	ev := func(path string) *Event {
+		return &Event{Ts: base, Route: "mb-ws9-shop", Method: "GET", Status: 200, Path: path, VID: "v1"}
+	}
+	a.Ingest(ev("/"), 9, 3)
+	a.Ingest(ev("/pricing"), 9, 3)
+	a.Ingest(ev("/pricing"), 9, 3)
+	a.Ingest(ev("/docs/getting-started"), 9, 3)
+	// An over-long path is truncated rather than stored whole.
+	long := "/" + strings.Repeat("x", 400)
+	a.Ingest(ev(long), 9, 3)
+
+	rows := a.Flush(time.UnixMilli(base).UTC().Add(2 * time.Minute))
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
+	}
+	paths := rows[0].TopPaths
+	if paths["/pricing"] != 2 || paths["/"] != 1 || paths["/docs/getting-started"] != 1 {
+		t.Fatalf("paths keyed wrong: %+v", paths)
+	}
+	if _, ok := paths[long]; ok {
+		t.Fatalf("stored an unbounded path: %d bytes", len(long))
+	}
+	for k := range paths {
+		if len(k) > maxPathLen+4 { // +4 covers the multi-byte ellipsis
+			t.Fatalf("path key not clipped: %d bytes", len(k))
+		}
+	}
+}
+
+// A template still wins when the gateway can supply one, so the breakdown
+// collapses /orders/1 and /orders/2 if routing ever grows real path patterns.
+func TestIngestPrefersPathTemplateWhenPresent(t *testing.T) {
+	a := NewAggregator()
+	base := time.Date(2026, 7, 18, 10, 30, 0, 0, time.UTC).UnixMilli()
+	for _, id := range []string{"1", "2", "3"} {
+		a.Ingest(&Event{
+			Ts: base, Route: "mb-ws9-shop", Method: "GET", Status: 200,
+			Path: "/orders/" + id, PathTemplate: "/orders/:id", VID: "v1",
+		}, 9, 3)
+	}
+	rows := a.Flush(time.UnixMilli(base).UTC().Add(2 * time.Minute))
+	if got := rows[0].TopPaths["/orders/:id"]; got != 3 {
+		t.Fatalf("template not preferred: %+v", rows[0].TopPaths)
 	}
 }

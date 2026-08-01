@@ -24,6 +24,7 @@ import (
 	"github.com/miabi-io/miabi/internal/runners"
 	"github.com/miabi-io/miabi/internal/selfcontainer"
 	"github.com/miabi-io/miabi/internal/services/alerting"
+	"github.com/miabi-io/miabi/internal/services/analytics"
 	"github.com/miabi-io/miabi/internal/services/application"
 	"github.com/miabi-io/miabi/internal/services/backup"
 	"github.com/miabi-io/miabi/internal/services/backupsettings"
@@ -477,6 +478,7 @@ func runServer(cli *okapicli.CLI) {
 					repositories.NewAnalyticsRepository(res.db),
 					cfg.AnalyticsStream, analyticsConsumerName("server"),
 					time.Duration(cfg.AnalyticsFlushSeconds)*time.Second, analyticsRetention(cfg, edition),
+					analytics.NewLiveTracker(res.redis, liveWindow(cfg)),
 				)
 				go analyticsConsumer.Run(eventCtx)
 			}
@@ -618,6 +620,12 @@ func analyticsRetention(cfg *config.Config, edition enterprise.EE) func() int {
 	return func() int {
 		return enterprise.ClampAnalyticsRetention(cfg.AnalyticsRetentionDays, edition.Entitlements().AnalyticsRetentionDays())
 	}
+}
+
+// liveWindow resolves how long a visitor counts as live. Shared by the consumer
+// (which writes) and the API (which reads), so both agree on the window.
+func liveWindow(cfg *config.Config) time.Duration {
+	return time.Duration(cfg.AnalyticsLiveWindowSeconds) * time.Second
 }
 
 func shutdownServer(res *serverResources) {

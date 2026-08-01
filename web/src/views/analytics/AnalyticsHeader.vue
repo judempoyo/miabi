@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import { useAnalyticsStore, ANALYTICS_RANGES } from '@/stores/analytics'
@@ -13,7 +13,7 @@ import { windowLabel } from './timeaxis'
 // only renders the report, and it mirrors the range + app selection into the URL
 // query so a reload or shared link restores the same view.
 const store = useAnalyticsStore()
-const { range, appFilter, appIds, appNames, report } = storeToRefs(store)
+const { range, appFilter, appIds, appNames, report, live, liveWindowSeconds } = storeToRefs(store)
 const ws = useWorkspaceStore()
 const { currentWorkspaceId } = storeToRefs(ws)
 const route = useRoute()
@@ -52,12 +52,25 @@ function seedFromQuery() {
   if (Number.isFinite(a) && a > 0) store.appFilter = a
 }
 
+let stopLive: (() => void) | null = null
 onMounted(() => {
   seedFromQuery()
   store.load()
+  stopLive = store.watchLive()
 })
+onBeforeUnmount(() => stopLive?.())
 // Reload when the workspace changes (range/app changes go through store actions).
-watch(currentWorkspaceId, () => store.load())
+watch(currentWorkspaceId, () => {
+  store.load()
+  store.loadLive()
+})
+
+// The live pill hides until the first poll answers, so it never flashes a 0 that
+// only means "not asked yet".
+const liveLabel = computed(() => {
+  const m = Math.round(liveWindowSeconds.value / 60)
+  return `${live.value} visitor${live.value === 1 ? '' : 's'} active in the last ${m} minute${m === 1 ? '' : 's'}`
+})
 
 // Mirror the current selection into the URL (replace, so it doesn't spam history).
 watch([range, appFilter], () => {
@@ -86,6 +99,10 @@ function onAppChange(e: Event) {
         </span>
       </div>
       <div class="a-controls">
+        <span v-if="live !== null" class="a-live" :class="{ idle: live === 0 }" :title="liveLabel">
+          <i class="a-live-dot"></i>
+          <b>{{ live }}</b> live
+        </span>
         <select
           :value="appFilter ?? ''"
           class="form-select a-select" style="max-width: 180px;"
@@ -143,6 +160,27 @@ function onAppChange(e: Event) {
 .a-title h1 { margin: 0; font-size: 24px; line-height: 1.2; }
 .a-ns { color: var(--text-muted); font-size: 14px; }
 .a-window { color: var(--text-muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Live visitors: a count of who's on the site right now, so it sits with the
+   controls rather than in the report body — it doesn't move with the range. */
+.a-live {
+  height: 34px; flex-shrink: 0;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 0 12px; border: 1px solid var(--border-primary); border-radius: 8px;
+  background: var(--bg-secondary); color: var(--text-secondary);
+  font-size: 13px; white-space: nowrap;
+}
+.a-live b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.a-live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success-600); flex: 0 0 auto; animation: a-live-pulse 2s ease-in-out infinite; }
+.a-live.idle { color: var(--text-muted); }
+.a-live.idle .a-live-dot { background: var(--text-muted); animation: none; }
+@keyframes a-live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.45); }
+  50% { opacity: 0.75; box-shadow: 0 0 0 4px rgba(22, 163, 74, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .a-live-dot { animation: none; }
+}
 .a-window .mdi { font-size: 13px; vertical-align: -1px; }
 .a-controls { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; max-width: 100%;}
 .a-select { padding: 7px 10px; border: 1px solid var(--border-primary); border-radius: 8px; background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; }
