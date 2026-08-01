@@ -26,6 +26,7 @@ import (
 	"github.com/miabi-io/miabi/internal/proxy"
 	"github.com/miabi-io/miabi/internal/runners"
 	"github.com/miabi-io/miabi/internal/services/account"
+	"github.com/miabi-io/miabi/internal/services/analytics"
 	"github.com/miabi-io/miabi/internal/services/application"
 	"github.com/miabi-io/miabi/internal/services/apply"
 	"github.com/miabi-io/miabi/internal/services/audit"
@@ -956,7 +957,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 			volumeBackup:    handlers.NewVolumeBackupHandler(volumeBackupService, volumeRepo, volumeBackupRepo, auditLogger),
 			workspaceBundle: handlers.NewWorkspaceBundleHandler(wsBundleService, auditLogger),
 			monitoring:      handlers.NewMonitoringHandler(monitoringService),
-			analytics:       handlers.NewAnalyticsHandler(repositories.NewAnalyticsRepository(db), ee),
+			analytics:       handlers.NewAnalyticsHandler(repositories.NewAnalyticsRepository(db), ee, analytics.NewLiveTracker(redisClient, time.Duration(cfg.AnalyticsLiveWindowSeconds)*time.Second)),
 			inbox:           handlers.NewNotificationInboxHandler(repositories.NewNotificationInboxRepository(db), bus),
 			alerts:          handlers.NewAlertHandler(repositories.NewAlertRepository(db)),
 			marketplace:     handlers.NewMarketplaceHandler(marketplaceService, auditLogger),

@@ -14,6 +14,7 @@ import (
 	"github.com/miabi-io/miabi/internal/netguard"
 	"github.com/miabi-io/miabi/internal/nodes"
 	"github.com/miabi-io/miabi/internal/proxy"
+	"github.com/miabi-io/miabi/internal/services/analytics"
 	"github.com/miabi-io/miabi/internal/services/application"
 	"github.com/miabi-io/miabi/internal/services/backup"
 	"github.com/miabi-io/miabi/internal/services/backupsettings"
@@ -289,6 +290,7 @@ func runWorker() error {
 			repositories.NewAnalyticsRepository(db),
 			cfg.AnalyticsStream, analyticsConsumerName("worker"),
 			time.Duration(cfg.AnalyticsFlushSeconds)*time.Second, analyticsRetention(cfg, edition),
+			analytics.NewLiveTracker(cfg.Redis.Client, liveWindow(cfg)),
 		)
 		go analyticsConsumer.Run(context.Background())
 	}

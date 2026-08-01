@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/miabi-io/miabi/internal/models"
@@ -86,6 +87,25 @@ func Percentile(hist []int64, p float64) float64 {
 	return float64(LatencyBoundsMs[len(LatencyBoundsMs)-1])
 }
 
+// maxPathLen bounds a stored request path. The gateway has no per-request path
+// patterns, so the paths breakdown is keyed on the raw request path — which is
+// client-controlled and ends up in the rollup's JSON map, so it can't be left
+// unbounded.
+const maxPathLen = 128
+
+// clipPath truncates an over-long path on a rune boundary, so the stored key
+// stays valid UTF-8.
+func clipPath(p string) string {
+	if len(p) <= maxPathLen {
+		return p
+	}
+	cut := maxPathLen
+	for cut > 0 && !utf8.RuneStart(p[cut]) {
+		cut--
+	}
+	return p[:cut] + "…"
+}
+
 // topKAdd adds n to key in m, keeping m bounded: once at cap, a new key only
 // displaces the current minimum (approximate top-K, fine for a dashboard).
 func topKAdd(m map[string]int64, key string, n int64) {
@@ -119,6 +139,14 @@ func mergeTopK(dst, src map[string]int64) {
 // classifyUA derives a coarse browser family, OS and device from a User-Agent
 // string with cheap substring matching — enough for the analytics breakdowns,
 // no dependency, no fingerprinting beyond family. bot is true for common crawlers.
+// IsBotUA reports whether a user agent looks automated, using the same rule as
+// the rollups' bot/human split — exported so callers outside the aggregator
+// (live visitors) classify traffic identically.
+func IsBotUA(ua string) bool {
+	_, _, _, bot := classifyUA(ua)
+	return bot
+}
+
 func classifyUA(ua string) (family, os, device string, bot bool) {
 	u := strings.ToLower(ua)
 	if u == "" {
@@ -271,10 +299,13 @@ func (a *Aggregator) Ingest(e *Event, ws, app uint) {
 	if e.VID != "" {
 		b.hll.Insert([]byte(e.VID))
 	}
+	// Prefer a path template when the gateway can supply one (it collapses
+	// /orders/1 and /orders/2 into one row); today it can't, so this is the raw
+	// request path.
 	if p := e.PathTemplate; p != "" {
-		topKAdd(r.TopPaths, p, 1)
+		topKAdd(r.TopPaths, clipPath(p), 1)
 	} else if e.Path != "" {
-		topKAdd(r.TopPaths, e.Path, 1)
+		topKAdd(r.TopPaths, clipPath(e.Path), 1)
 	}
 	topKAdd(r.TopReferrers, e.RefererHost, 1)
 	topKAdd(r.TopCountries, e.Country, 1)

@@ -27,6 +27,13 @@ export const useAnalyticsStore = defineStore('analytics', () => {
   const appIds = ref<number[]>([])
   const appNames = ref<Record<number, string>>({})
 
+  // Live visitors is a "right now" number, so it polls on its own cadence
+  // instead of riding the report load. null = not loaded yet (the pill hides).
+  const live = ref<number | null>(null)
+  const liveWindowSeconds = ref(300)
+  let liveTimer: ReturnType<typeof setInterval> | null = null
+  let liveWatchers = 0
+
   let lastKey = ''
 
   function key(ws: number) {
@@ -75,6 +82,54 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     }
   }
 
+  // LIVE_POLL_MS is the refresh cadence of the live pill. The number is a count
+  // over a multi-minute window, so polling faster only adds requests.
+  const LIVE_POLL_MS = 10_000
+
+  async function loadLive() {
+    const ws = useWorkspaceStore().currentWorkspaceId
+    if (!ws) return
+    try {
+      const res = await analyticsApi.live(ws, appFilter.value ?? undefined)
+      live.value = res.data.data?.visitors ?? 0
+      if (res.data.data?.window_seconds) liveWindowSeconds.value = res.data.data.window_seconds
+    } catch {
+      // Best-effort: a failed poll leaves the last known value in place rather
+      // than flashing the pill away.
+    }
+  }
+
+  // watchLive starts polling for the first watcher and stops when the last one
+  // leaves, so a backgrounded dashboard isn't polling forever. Returns the
+  // matching stop function. Polling pauses while the tab is hidden.
+  function watchLive(): () => void {
+    liveWatchers++
+    if (liveWatchers === 1) {
+      loadLive()
+      liveTimer = setInterval(() => {
+        if (!document.hidden) loadLive()
+      }, LIVE_POLL_MS)
+      document.addEventListener('visibilitychange', onVisible)
+    }
+    let stopped = false
+    return () => {
+      if (stopped) return
+      stopped = true
+      liveWatchers--
+      if (liveWatchers === 0) {
+        if (liveTimer) clearInterval(liveTimer)
+        liveTimer = null
+        document.removeEventListener('visibilitychange', onVisible)
+      }
+    }
+  }
+
+  // Refresh straight away when the tab comes back, so the pill isn't showing a
+  // number from before the user switched away.
+  function onVisible() {
+    if (!document.hidden) loadLive()
+  }
+
   function setRange(r: string) {
     if (r === range.value) return
     range.value = r
@@ -85,7 +140,12 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     if (id === appFilter.value) return
     appFilter.value = id
     load()
+    loadLive() // the pill is app-scoped too
   }
 
-  return { range, appFilter, report, loading, error, appIds, appNames, load, setRange, setApp }
+  return {
+    range, appFilter, report, loading, error, appIds, appNames,
+    live, liveWindowSeconds,
+    load, setRange, setApp, loadLive, watchLive,
+  }
 })

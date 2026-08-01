@@ -24,10 +24,14 @@ import (
 type AnalyticsHandler struct {
 	repo *repositories.AnalyticsRepository
 	ee   enterprise.EE
+	// live is nil when Redis isn't configured; the endpoint then reports zero
+	// rather than failing, since live visitors is an accent on the dashboard and
+	// not something worth erroring a page over.
+	live *analytics.LiveTracker
 }
 
-func NewAnalyticsHandler(repo *repositories.AnalyticsRepository, ee enterprise.EE) *AnalyticsHandler {
-	return &AnalyticsHandler{repo: repo, ee: ee}
+func NewAnalyticsHandler(repo *repositories.AnalyticsRepository, ee enterprise.EE, live *analytics.LiveTracker) *AnalyticsHandler {
+	return &AnalyticsHandler{repo: repo, ee: ee, live: live}
 }
 
 // maxAnalyticsRange caps how far back a single query may look, keeping the
@@ -137,6 +141,38 @@ func (h *AnalyticsHandler) Export(c *okapi.Context) error {
 		})
 	}
 	return nil
+}
+
+// Live returns the number of distinct visitors seen in the last few minutes,
+// for the workspace or (with ?app=) one application. It is polled by the
+// dashboard, so it stays a single cheap Redis read and never touches the
+// database. Community and Enterprise alike.
+func (h *AnalyticsHandler) Live(c *okapi.Context) error {
+	wsID := middlewares.WorkspaceID(c)
+
+	appFilter, err := appFilterParam(c)
+	if err != nil {
+		return c.AbortBadRequest("invalid app id")
+	}
+	var app uint
+	if appFilter != nil {
+		app = *appFilter
+	}
+
+	window := analytics.DefaultLiveWindow
+	if h.live != nil {
+		window = h.live.Window()
+	}
+	// A missing or unreachable Redis means "nobody counted", not an error: the
+	// rest of the dashboard reads from Postgres and is unaffected.
+	count, err := h.live.Count(c.Request().Context(), wsID, app)
+	if err != nil {
+		count = 0
+	}
+	return ok(c, map[string]any{
+		"visitors":       count,
+		"window_seconds": int(window.Seconds()),
+	})
 }
 
 // appFilterParam reads an optional ?app= application id (nil when absent).
