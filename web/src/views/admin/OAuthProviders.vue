@@ -58,7 +58,11 @@ interface ProviderForm {
   auto_register: boolean
   email_claim: string
   name_claim: string
-  default_workspace_id: string
+  username_claim: string
+  // v-model on <input type="number"> replaces the string with a number as soon
+  // as the field is non-empty — Vue casts by the element's type, not by the
+  // declared one — so this is a string only while it is blank.
+  default_workspace_id: number | string
   default_role: string
 }
 
@@ -80,6 +84,7 @@ function emptyForm(): ProviderForm {
     auto_register: true,
     email_claim: '',
     name_claim: '',
+    username_claim: '',
     default_workspace_id: '',
     default_role: '',
   }
@@ -115,6 +120,7 @@ function openEdit(p: OAuthProvider) {
     auto_register: p.auto_register,
     email_claim: p.email_claim ?? '',
     name_claim: p.name_claim ?? '',
+    username_claim: p.username_claim ?? '',
     default_workspace_id: p.default_workspace_id ? String(p.default_workspace_id) : '',
     default_role: p.default_role ?? '',
   }
@@ -149,8 +155,10 @@ async function save() {
   payload.allowed_domains = domains
 
   // Auto-join (both provider types). Send 0 to clear on edit, the id to set.
-  const wsId = parseInt(f.default_workspace_id.trim(), 10)
-  payload.default_workspace_id = Number.isFinite(wsId) ? wsId : 0
+  // String() first: the field is a number once typed into (see AdminForm).
+  const rawWs = String(f.default_workspace_id ?? '').trim()
+  const wsId = rawWs ? parseInt(rawWs, 10) : NaN
+  payload.default_workspace_id = Number.isFinite(wsId) && wsId > 0 ? wsId : 0
   payload.default_role = f.default_role.trim()
 
   if (f.type === 'oidc') {
@@ -163,6 +171,7 @@ async function save() {
     if (userinfoUrl) payload.userinfo_url = userinfoUrl
     payload.email_claim = f.email_claim.trim()
     payload.name_claim = f.name_claim.trim()
+    payload.username_claim = f.username_claim.trim()
   }
 
   const secret = f.client_secret.trim()
@@ -389,6 +398,14 @@ onMounted(() => {
                   <label class="form-label">Name claim</label>
                   <input v-model="form.name_claim" class="form-input" placeholder="name" />
                   <span class="form-hint">Userinfo claim mapped to the display name. Blank = standard "name".</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Username claim</label>
+                  <input v-model="form.username_claim" class="form-input" placeholder="preferred_username" />
+                  <span class="form-hint">
+                    Userinfo claim mapped to the handle. Blank = standard "preferred_username"; if the provider
+                    sends neither, the handle is derived from the email address.
+                  </span>
                 </div>
               </template>
 

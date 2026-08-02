@@ -255,7 +255,9 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 		BaseURL: cfg.ApiBaseURL,
 		Decrypt: crypto.Decrypt, // read the LDAP bind password stored at rest
 		Login: func(ctx context.Context, ident enterprise.SSOIdentity) (string, error) {
-			user, err := oauthService.ProvisionSSOUser(ctx, ident.Email, ident.Name)
+			// SAML assertions don't carry a handle through SSOIdentity, so the
+			// username is derived from the email as before.
+			user, err := oauthService.ProvisionSSOUser(ctx, ident.Email, ident.Name, "")
 			if err != nil {
 				return "", err
 			}

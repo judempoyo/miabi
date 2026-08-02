@@ -4,6 +4,7 @@
 package slug
 
 import (
+	"errors"
 	"regexp"
 	"testing"
 )
@@ -104,5 +105,32 @@ func TestUniqueAvailable(t *testing.T) {
 	}
 	if got != "workspace" {
 		t.Errorf("UniqueAvailable(!!!) = %q, want workspace", got)
+	}
+}
+
+// Available is what identity providers hand their asserted handle to.
+func TestAvailable(t *testing.T) {
+	taken := map[string]bool{"jdoe": true}
+	exists := func(c string) (bool, error) { return taken[c], nil }
+
+	cases := []struct{ name, in, want string }{
+		{"a free handle is used as asserted", "jsmith", "jsmith"},
+		{"normalised to the stored form", "J.Doe", "j-doe"},
+		{"a taken handle is suffixed, not refused", "jdoe", "jdoe-1"},
+		{"a reserved handle is suffixed too", "admin", "admin-1"},
+		{"blank means no assertion", "", ""},
+		{"whitespace means no assertion", "   ", ""},
+		{"input that slugifies to nothing means no assertion", "!!!", ""},
+	}
+	for _, tc := range cases {
+		if got := Available(tc.in, exists); got != tc.want {
+			t.Errorf("%s: Available(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+
+	// A failed lookup must not block a sign-in.
+	boom := func(string) (bool, error) { return false, errors.New("db down") }
+	if got := Available("jsmith", boom); got != "" {
+		t.Errorf("lookup failure returned %q, want \"\"", got)
 	}
 }

@@ -77,6 +77,7 @@ type CreateOAuthProviderRequest struct {
 		// Claim mapping + auto-join.
 		EmailClaim         string `json:"email_claim"`
 		NameClaim          string `json:"name_claim"`
+		UsernameClaim      string `json:"username_claim"`
 		DefaultWorkspaceID *uint  `json:"default_workspace_id"`
 		DefaultRole        string `json:"default_role"`
 	} `json:"body"`
@@ -100,6 +101,7 @@ type UpdateOAuthProviderRequest struct {
 		AllowedDomains     *string `json:"allowed_domains"`
 		EmailClaim         *string `json:"email_claim"`
 		NameClaim          *string `json:"name_claim"`
+		UsernameClaim      *string `json:"username_claim"`
 		DefaultWorkspaceID *uint   `json:"default_workspace_id"`
 		DefaultRole        *string `json:"default_role"`
 	} `json:"body"`
@@ -158,6 +160,7 @@ func (h *OAuthAdminHandler) Create(c *okapi.Context, req *CreateOAuthProviderReq
 		AllowedDomains:     strings.TrimSpace(req.Body.AllowedDomains),
 		EmailClaim:         strings.TrimSpace(req.Body.EmailClaim),
 		NameClaim:          strings.TrimSpace(req.Body.NameClaim),
+		UsernameClaim:      strings.TrimSpace(req.Body.UsernameClaim),
 		DefaultWorkspaceID: req.Body.DefaultWorkspaceID,
 		DefaultRole:        models.WorkspaceRole(strings.TrimSpace(req.Body.DefaultRole)),
 	}
@@ -216,6 +219,9 @@ func (h *OAuthAdminHandler) Update(c *okapi.Context, req *UpdateOAuthProviderReq
 	}
 	if req.Body.EmailClaim != nil {
 		p.EmailClaim = strings.TrimSpace(*req.Body.EmailClaim)
+	}
+	if req.Body.UsernameClaim != nil {
+		p.UsernameClaim = strings.TrimSpace(*req.Body.UsernameClaim)
 	}
 	if req.Body.NameClaim != nil {
 		p.NameClaim = strings.TrimSpace(*req.Body.NameClaim)

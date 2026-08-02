@@ -493,6 +493,7 @@ export interface OAuthProvider {
   allowed_domains?: string
   email_claim?: string
   name_claim?: string
+  username_claim?: string
   default_workspace_id?: number | null
   default_role?: string
   created_at?: string
