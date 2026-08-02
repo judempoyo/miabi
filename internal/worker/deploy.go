@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -505,6 +506,18 @@ func (h *DeployHandler) run(ctx context.Context, app *models.Application, dep *m
 			}
 		}
 	}
+	if eff := effectiveStrategy(dep.Strategy, len(ports)); eff != dep.Strategy {
+		published := make([]string, 0, len(ports))
+		for key := range ports {
+			published = append(published, key)
+		}
+		sort.Strings(published)
+		h.log(dep, fmt.Sprintf("host port %s is published — rolling would collide on it, using recreate (brief downtime)",
+			strings.Join(published, ", ")))
+		dep.Strategy = eff
+		_ = h.deployments.Update(dep)
+	}
+
 	// Recreate strategy: stop the current container before starting the new one
 	// (accepts brief downtime; required when versions can't coexist).
 	if dep.Strategy == models.DeployRecreate {
@@ -1653,11 +1666,13 @@ func (h *DeployHandler) swapAndRelease(app *models.Application, dep *models.Depl
 	h.externalizeLog(dep.ID)
 }
 
-// failedAppStatus decides an application's status after a failed deploy. A
-// rolling/canary deploy starts the new container alongside the old and discards
-// only the new one on failure, so the previous release keeps serving — the app is
-// still running. A recreate stopped the old container first, and a first-ever
-// deploy (no current release) has nothing to fall back to, so those are failed.
+func effectiveStrategy(requested models.DeployStrategy, publishedHostPorts int) models.DeployStrategy {
+	if requested == models.DeployRolling && publishedHostPorts > 0 {
+		return models.DeployRecreate
+	}
+	return requested
+}
+
 func failedAppStatus(hasCurrentRelease bool, strategy models.DeployStrategy) models.AppStatus {
 	if hasCurrentRelease && strategy != models.DeployRecreate {
 		return models.AppStatusRunning
@@ -1672,13 +1687,6 @@ func (h *DeployHandler) fail(dep *models.Deployment, cause error) error {
 	dep.FinishedAt = &finished
 	_ = h.deployments.Update(dep)
 
-	// A failed deploy must not mark the whole app failed when the previous release
-	// is still serving. Rolling/canary start the new container alongside the old
-	// and only discard the new one on failure, so the old release keeps running —
-	// the app is still "running", just on its prior version. Only a recreate (which
-	// stopped the old container first) or a first-ever deploy (no prior release)
-	// leaves nothing running, so those are genuinely failed. The live container
-	// health corrects any edge case on the app detail view.
 	app, _ := h.apps.FindByID(dep.ApplicationID)
 	hasCurrentRelease := app != nil && app.CurrentReleaseID != nil
 	_ = h.apps.SetStatus(dep.ApplicationID, failedAppStatus(hasCurrentRelease, dep.Strategy))
