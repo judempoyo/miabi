@@ -335,6 +335,24 @@ function routeUrl(r: Route, host: string): string {
 
 // Ports / host bindings
 const appBindings = ref<PortBinding[]>([])
+// Approved host port bindings rule out rolling: the new container would have to
+// publish a port the running one still holds, which Docker refuses. The worker
+// falls back to recreate, so the form stops offering rolling rather than promise
+// a zero-downtime deploy it can't do.
+const publishedHostPorts = computed(() => appBindings.value.filter((b) => b.status === 'approved'))
+const hasHostPorts = computed(() => publishedHostPorts.value.length > 0)
+const hostPortList = computed(() => publishedHostPorts.value.map((b) => `${b.host_port}/${b.protocol}`).join(', '))
+// Rolling is hidden (not just disabled) when it cannot run, so the list only
+// contains choices that do what they say.
+const availableStrategies = computed(() =>
+  hasHostPorts.value ? STRATEGIES.filter((s) => s.value !== 'rolling') : STRATEGIES,
+)
+async function loadBindings() {
+  if (!wid.value) return
+  try {
+    appBindings.value = (await portBindingApi.listByApp(wid.value, appId.value)).data.data ?? []
+  } catch { /* the strategy guard just stays off */ }
+}
 const showBindReq = ref(false)
 const requestingBind = ref(false)
 const bindForm = ref<{ container_port: number; protocol: 'tcp' | 'udp'; host_port: number }>({ container_port: 0, protocol: 'tcp', host_port: 0 })
@@ -642,6 +660,8 @@ async function loadTab() {
     else if (tab.value === 'databases') appDatabases.value = (await appApi.databases(wid.value, appId.value)).data.data ?? []
     else if (tab.value === 'releases') releases.value = (await appApi.releases(wid.value, appId.value)).data.data ?? []
     else if (tab.value === 'settings') {
+      // The strategy picker greys out rolling when a host port is published.
+      await loadBindings()
       registries.value = (await registryApi.list(wid.value)).data.data ?? []
       gitRepos.value = (await gitRepositoryApi.list(wid.value)).data.data ?? []
       networks.value = (await networkApi.list(wid.value)).data.data ?? []
@@ -1067,10 +1087,16 @@ async function confirmTemplateImageChange(): Promise<boolean> {
   })
 }
 
-function openDeploy() {
+async function openDeploy() {
   deployTag.value = app.value?.tag || ''
-  deployStrategy.value = app.value?.deploy_strategy || 'rolling'
   showDeploy.value = true
+  // Bindings are otherwise only loaded on the Ports tab, and the strategy list
+  // depends on them.
+  await loadBindings()
+  const preferred = app.value?.deploy_strategy || 'rolling'
+  deployStrategy.value = availableStrategies.value.some((s) => s.value === preferred)
+    ? preferred
+    : 'recreate'
 }
 
 async function confirmDeploy() {
@@ -2584,12 +2610,27 @@ async function detachDatabase(d: AppDatabase) {
           <div class="form-group">
             <label class="form-label">Default strategy</label>
             <div class="strategy-options">
-              <label v-for="s in STRATEGIES" :key="s.value" class="strategy-option" :class="{ active: settingsForm.deploy_strategy === s.value }">
-                <input type="radio" :value="s.value" v-model="settingsForm.deploy_strategy" :disabled="!ws.canEdit" />
-                <span><span class="strategy-name">{{ s.label }}</span><span class="strategy-hint">{{ s.hint }}</span></span>
+              <label
+                v-for="s in STRATEGIES"
+                :key="s.value"
+                class="strategy-option"
+                :class="{ active: settingsForm.deploy_strategy === s.value, unavailable: hasHostPorts && s.value === 'rolling' }"
+              >
+                <input
+                  type="radio"
+                  :value="s.value"
+                  v-model="settingsForm.deploy_strategy"
+                  :disabled="!ws.canEdit || (hasHostPorts && s.value === 'rolling')"
+                />
+                <span>
+                  <span class="strategy-name">{{ s.label }}</span>
+                  <span class="strategy-hint">
+                    {{ hasHostPorts && s.value === 'rolling' ? `Unavailable while host port ${hostPortList} is published — it can only be held by one container at a time.` : s.hint }}
+                  </span>
+                </span>
               </label>
             </div>
-            <p class="form-hint">Applied when you Deploy without choosing a strategy. Config-change redeploys always use rolling.</p>
+            <p class="form-hint">Applied when you Deploy without choosing a strategy. Config-change redeploys always use rolling{{ hasHostPorts ? ', which falls back to recreate here' : '' }}.</p>
           </div>
           <template v-if="settingsForm.deploy_strategy === 'canary'">
             <div class="form-row">
@@ -3093,10 +3134,15 @@ async function detachDatabase(d: AppDatabase) {
               <div class="form-group" style="margin-bottom: 8px">
                 <label class="form-label">Deployment strategy</label>
                 <select v-model="deployStrategy" class="form-select">
-                  <option v-for="s in STRATEGIES" :key="s.value" :value="s.value">{{ s.label }}</option>
+                  <option v-for="s in availableStrategies" :key="s.value" :value="s.value">{{ s.label }}</option>
                 </select>
               </div>
-              <p class="form-hint">{{ strategyHint(deployStrategy) }}<span v-if="!isDeployed && deployStrategy === 'canary'"><br />First deploy can't canary — it will run as rolling.</span></p>
+              <p class="form-hint">
+                {{ strategyHint(deployStrategy) }}
+                <span v-if="!isDeployed && deployStrategy === 'canary'"><br />First deploy can't canary — it will run as rolling.</span>
+                <span v-if="hasHostPorts"><br />Rolling isn't available: host port {{ hostPortList }} can only be held by one container at a time.</span>
+                <span v-if="hasHostPorts && deployStrategy === 'canary'"><br />The canary won't publish the host port — only traffic through a route reaches it.</span>
+              </p>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" @click="showDeploy = false">Cancel</button>
@@ -3342,6 +3388,8 @@ async function detachDatabase(d: AppDatabase) {
 .strategy-options { display: flex; flex-direction: column; gap: 8px; }
 .strategy-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-input); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); }
 .strategy-option:hover { border-color: var(--text-muted); }
+.strategy-option.unavailable { opacity: 0.6; }
+.strategy-option.unavailable .strategy-name { text-decoration: line-through; }
 .strategy-option.active { border-color: var(--primary-500); background: var(--primary-50); }
 .strategy-option input { margin-top: 3px; }
 .strategy-option span { display: flex; flex-direction: column; }
