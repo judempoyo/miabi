@@ -19,6 +19,7 @@ import (
 	"github.com/jkaninda/logger"
 	"github.com/miabi-io/miabi/internal/enterprise"
 	"github.com/miabi-io/miabi/internal/models"
+	"github.com/miabi-io/miabi/internal/slug"
 	"github.com/miabi-io/miabi/internal/storage/repositories"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -80,9 +81,15 @@ func (s *Service) Login(ctx context.Context, identifier, password string) (*mode
 // creates a new directory-managed one. The first user on the platform becomes
 // the admin, mirroring the OAuth/SAML JIT policy.
 func (s *Service) provision(ident enterprise.LDAPIdentity) (*models.User, error) {
-	username := strings.ToLower(strings.TrimSpace(ident.Username))
+	// Match on the slugified handle, because that is the form BeforeCreate stores:
+	// a plain lowercase misses "J.Doe" (stored as "j-doe") and then collides with
+	// that very row on insert.
+	username := slug.Make(ident.Username, "")
 	email := strings.ToLower(strings.TrimSpace(ident.Email))
 
+	// A matching handle links to the existing account, across auth sources — the
+	// migration case, where local accounts predate the directory and should not be
+	// duplicated (see TestLogin_MatchesExistingByUsername).
 	if username != "" {
 		if u, err := s.users.FindByUsername(username); err == nil {
 			return activeOrErr(u)
@@ -111,9 +118,12 @@ func (s *Service) provision(ident enterprise.LDAPIdentity) (*models.User, error)
 	}
 	now := time.Now()
 	user := &models.User{
-		Name:            name,
-		Email:           email,
-		Username:        username, // BeforeCreate slugifies; empty → derived from email
+		Name:  name,
+		Email: email,
+		// A directory handle can collide with a local or OAuth account, and
+		// BeforeCreate trusts a supplied username without checking it — an
+		// unchecked collision fails the insert, i.e. fails the sign-in.
+		Username:        slug.Available(username, s.users.ExistsByUsername),
 		PasswordHash:    unusablePassword(),
 		Role:            role,
 		Active:          true,

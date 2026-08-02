@@ -20,6 +20,8 @@ import ContainerProcesses from '@/components/ContainerProcesses.vue'
 import LogViewer from '@/components/LogViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import MetadataCard from '@/components/MetadataCard.vue'
+import EnvVarModal from '@/components/EnvVarModal.vue'
+import RouteFormModal from '@/components/RouteFormModal.vue'
 import AppAccessPanel from '@/components/AppAccessPanel.vue'
 import type { Application, AppOverview, Deployment, Release, AppEnvVar, Route, Network, Stack, Volume, StatsSample, Registry, GitRepository, AppEvent, AppPort, PortBinding, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, DatabaseInstance, LogicalDatabase, NodePlacement, PipelineDefinition } from '@/api/types'
 
@@ -305,6 +307,26 @@ const copiedEnvKey = ref('')
 const appRoutes = ref<Route[]>([])
 // Browser URL for a route host (https when TLS is on), so users can open the app
 // directly from the Routes tab.
+// Routes are created and edited in place: routing an app is something you decide
+// while looking at the app, so the same form the routes page uses opens here with
+// the application fixed.
+const showRouteModal = ref(false)
+const editingRoute = ref<Route | null>(null)
+function addRoute() {
+  editingRoute.value = null
+  showRouteModal.value = true
+}
+function editRoute(r: Route) {
+  // Generated external-access routes are managed from External Access.
+  if (r.generated) { router.push(`/routes/${r.id}`); return }
+  editingRoute.value = r
+  showRouteModal.value = true
+}
+async function onRouteSaved() {
+  showRouteModal.value = false
+  if (wid.value) appRoutes.value = (await routeApi.listByApp(wid.value, appId.value)).data.data ?? []
+}
+
 function routeUrl(r: Route, host: string): string {
   const scheme = r.tls_mode && r.tls_mode !== 'none' ? 'https' : 'http'
   const path = r.path && r.path !== '/' ? r.path : ''
@@ -313,6 +335,24 @@ function routeUrl(r: Route, host: string): string {
 
 // Ports / host bindings
 const appBindings = ref<PortBinding[]>([])
+// Approved host port bindings rule out rolling: the new container would have to
+// publish a port the running one still holds, which Docker refuses. The worker
+// falls back to recreate, so the form stops offering rolling rather than promise
+// a zero-downtime deploy it can't do.
+const publishedHostPorts = computed(() => appBindings.value.filter((b) => b.status === 'approved'))
+const hasHostPorts = computed(() => publishedHostPorts.value.length > 0)
+const hostPortList = computed(() => publishedHostPorts.value.map((b) => `${b.host_port}/${b.protocol}`).join(', '))
+// Rolling is hidden (not just disabled) when it cannot run, so the list only
+// contains choices that do what they say.
+const availableStrategies = computed(() =>
+  hasHostPorts.value ? STRATEGIES.filter((s) => s.value !== 'rolling') : STRATEGIES,
+)
+async function loadBindings() {
+  if (!wid.value) return
+  try {
+    appBindings.value = (await portBindingApi.listByApp(wid.value, appId.value)).data.data ?? []
+  } catch { /* the strategy guard just stays off */ }
+}
 const showBindReq = ref(false)
 const requestingBind = ref(false)
 const bindForm = ref<{ container_port: number; protocol: 'tcp' | 'udp'; host_port: number }>({ container_port: 0, protocol: 'tcp', host_port: 0 })
@@ -620,6 +660,8 @@ async function loadTab() {
     else if (tab.value === 'databases') appDatabases.value = (await appApi.databases(wid.value, appId.value)).data.data ?? []
     else if (tab.value === 'releases') releases.value = (await appApi.releases(wid.value, appId.value)).data.data ?? []
     else if (tab.value === 'settings') {
+      // The strategy picker greys out rolling when a host port is published.
+      await loadBindings()
       registries.value = (await registryApi.list(wid.value)).data.data ?? []
       gitRepos.value = (await gitRepositoryApi.list(wid.value)).data.data ?? []
       networks.value = (await networkApi.list(wid.value)).data.data ?? []
@@ -1045,10 +1087,16 @@ async function confirmTemplateImageChange(): Promise<boolean> {
   })
 }
 
-function openDeploy() {
+async function openDeploy() {
   deployTag.value = app.value?.tag || ''
-  deployStrategy.value = app.value?.deploy_strategy || 'rolling'
   showDeploy.value = true
+  // Bindings are otherwise only loaded on the Ports tab, and the strategy list
+  // depends on them.
+  await loadBindings()
+  const preferred = app.value?.deploy_strategy || 'rolling'
+  deployStrategy.value = availableStrategies.value.some((s) => s.value === preferred)
+    ? preferred
+    : 'recreate'
 }
 
 async function confirmDeploy() {
@@ -1131,12 +1179,11 @@ function openEnvEdit(e: AppEnvVar) {
   envForm.value = { key: e.key, value: e.is_secret ? '' : e.value, secret: e.is_secret }
   showEnvModal.value = true
 }
-async function saveEnv() {
-  const key = envForm.value.key.trim()
-  if (!wid.value || !key) return
+async function saveEnv(v: { key: string; value: string; secret: boolean }) {
+  if (!wid.value || !v.key) return
   savingEnv.value = true
   try {
-    await appApi.setEnvVar(wid.value, appId.value, key, envForm.value.value, envForm.value.secret)
+    await appApi.setEnvVar(wid.value, appId.value, v.key, v.value, v.secret)
     notify.success((editingEnvKey.value ? 'Variable updated' : 'Variable added') + changeNote())
     showEnvModal.value = false
     loadApp()
@@ -2172,18 +2219,23 @@ async function detachDatabase(d: AppDatabase) {
     <div v-else-if="tab === 'routes'" class="card">
       <div class="card-header">
         <h2>Routes</h2>
-        <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">Manage routes</button>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">Manage routes</button>
+          <button v-if="ws.canEdit" class="btn btn-primary btn-sm" @click="addRoute">
+            <span class="mdi mdi-plus"></span> Add route
+          </button>
+        </div>
       </div>
       <div v-if="appRoutes.length === 0" class="empty-state">
         <span class="mdi mdi-routes" style="font-size: 36px; color: var(--text-muted)"></span>
         <p>No routes for this app.</p>
-        <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="router.push('/routes')">Add a route</button>
+        <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="addRoute">Add a route</button>
       </div>
       <div v-else class="table-wrapper">
         <table>
           <thead><tr><th>Route</th><th>Hosts</th><th>TLS</th><th class="text-right">Status</th></tr></thead>
           <tbody>
-            <tr v-for="r in appRoutes" :key="r.id" class="row-clickable" @click="router.push('/routes')">
+            <tr v-for="r in appRoutes" :key="r.id" class="row-clickable" @click="editRoute(r)">
               <td><span class="cell-title">{{ r.name }}</span><div class="cell-sub">{{ r.path }}</div></td>
               <td>
                 <template v-if="r.hosts && r.hosts.length">
@@ -2558,12 +2610,27 @@ async function detachDatabase(d: AppDatabase) {
           <div class="form-group">
             <label class="form-label">Default strategy</label>
             <div class="strategy-options">
-              <label v-for="s in STRATEGIES" :key="s.value" class="strategy-option" :class="{ active: settingsForm.deploy_strategy === s.value }">
-                <input type="radio" :value="s.value" v-model="settingsForm.deploy_strategy" :disabled="!ws.canEdit" />
-                <span><span class="strategy-name">{{ s.label }}</span><span class="strategy-hint">{{ s.hint }}</span></span>
+              <label
+                v-for="s in STRATEGIES"
+                :key="s.value"
+                class="strategy-option"
+                :class="{ active: settingsForm.deploy_strategy === s.value, unavailable: hasHostPorts && s.value === 'rolling' }"
+              >
+                <input
+                  type="radio"
+                  :value="s.value"
+                  v-model="settingsForm.deploy_strategy"
+                  :disabled="!ws.canEdit || (hasHostPorts && s.value === 'rolling')"
+                />
+                <span>
+                  <span class="strategy-name">{{ s.label }}</span>
+                  <span class="strategy-hint">
+                    {{ hasHostPorts && s.value === 'rolling' ? `Unavailable while host port ${hostPortList} is published — it can only be held by one container at a time.` : s.hint }}
+                  </span>
+                </span>
               </label>
             </div>
-            <p class="form-hint">Applied when you Deploy without choosing a strategy. Config-change redeploys always use rolling.</p>
+            <p class="form-hint">Applied when you Deploy without choosing a strategy. Config-change redeploys always use rolling{{ hasHostPorts ? ', which falls back to recreate here' : '' }}.</p>
           </div>
           <template v-if="settingsForm.deploy_strategy === 'canary'">
             <div class="form-row">
@@ -2762,6 +2829,27 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Delete application -->
     <Teleport to="body">
+      <RouteFormModal
+        :open="showRouteModal"
+        :workspace-id="wid"
+        :editing="editingRoute"
+        :apps="app ? [app] : []"
+        :preset-app-id="appId"
+        lock-app
+        @close="showRouteModal = false"
+        @saved="onRouteSaved"
+      />
+
+      <EnvVarModal
+        :open="showEnvModal"
+        :editing-key="editingEnvKey"
+        :initial="envForm"
+        :saving="savingEnv"
+        :apply-note="isDeployed ? 'Applies on the next deploy.' : ''"
+        @close="showEnvModal = false"
+        @save="saveEnv"
+      />
+
       <div v-if="showDelete && app" class="modal-overlay" @click.self="showDelete = false">
         <div class="modal">
           <div class="modal-header">
@@ -2884,57 +2972,6 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Add / update env var -->
     <Teleport to="body">
-      <div v-if="showEnvModal" class="modal-overlay" @click.self="showEnvModal = false">
-        <div class="modal" style="max-width: 480px; width: 100%">
-          <div class="modal-header">
-            <h3>{{ editingEnvKey ? 'Update variable' : 'Add variable' }}</h3>
-            <button class="btn-icon btn-icon-muted" aria-label="Close" @click="showEnvModal = false"><span class="mdi mdi-close"></span></button>
-          </div>
-          <form @submit.prevent="saveEnv">
-            <div class="modal-body">
-              <div class="form-group">
-                <label class="form-label">Key</label>
-                <input
-                  v-model="envForm.key"
-                  class="form-input mono-input"
-                  :readonly="!!editingEnvKey"
-                  spellcheck="false"
-                  autocapitalize="off"
-                  autocomplete="off"
-                  placeholder="DATABASE_URL"
-                  required
-                  :autofocus="!editingEnvKey"
-                />
-                <p v-if="editingEnvKey" class="form-hint">The key can't be changed. Delete and re-add to rename.</p>
-              </div>
-              <div class="form-group">
-                <label class="form-label">
-                  Value
-                  <span v-if="editingEnvKey && envForm.secret" class="text-muted">— re-enter (secret values aren't shown)</span>
-                </label>
-                <textarea
-                  v-model="envForm.value"
-                  class="form-input mono-input"
-                  rows="3"
-                  spellcheck="false"
-                  :placeholder="envForm.secret ? 'super-secret-value' : `value or ${secretRefHint}`"
-                ></textarea>
-              </div>
-              <label class="checkbox-label" style="margin-bottom: 0">
-                <input type="checkbox" v-model="envForm.secret" />
-                <span><span class="mdi mdi-lock-outline"></span> Secret — encrypted at rest and masked in the UI</span>
-              </label>
-              <p class="form-hint">
-                Reference a workspace secret with <code>{{ secretRefHint }}</code>.{{ isDeployed ? ' Applies on the next deploy.' : '' }}
-              </p>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" @click="showEnvModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="savingEnv || !envForm.key.trim()">{{ savingEnv ? 'Saving…' : (editingEnvKey ? 'Update' : 'Add variable') }}</button>
-            </div>
-          </form>
-        </div>
-      </div>
     </Teleport>
 
     <!-- Import .env -->
@@ -3097,10 +3134,15 @@ async function detachDatabase(d: AppDatabase) {
               <div class="form-group" style="margin-bottom: 8px">
                 <label class="form-label">Deployment strategy</label>
                 <select v-model="deployStrategy" class="form-select">
-                  <option v-for="s in STRATEGIES" :key="s.value" :value="s.value">{{ s.label }}</option>
+                  <option v-for="s in availableStrategies" :key="s.value" :value="s.value">{{ s.label }}</option>
                 </select>
               </div>
-              <p class="form-hint">{{ strategyHint(deployStrategy) }}<span v-if="!isDeployed && deployStrategy === 'canary'"><br />First deploy can't canary — it will run as rolling.</span></p>
+              <p class="form-hint">
+                {{ strategyHint(deployStrategy) }}
+                <span v-if="!isDeployed && deployStrategy === 'canary'"><br />First deploy can't canary — it will run as rolling.</span>
+                <span v-if="hasHostPorts"><br />Rolling isn't available: host port {{ hostPortList }} can only be held by one container at a time.</span>
+                <span v-if="hasHostPorts && deployStrategy === 'canary'"><br />The canary won't publish the host port — only traffic through a route reaches it.</span>
+              </p>
             </div>
             <div class="modal-footer">
               <button type="button" class="btn btn-secondary" @click="showDeploy = false">Cancel</button>
@@ -3346,6 +3388,8 @@ async function detachDatabase(d: AppDatabase) {
 .strategy-options { display: flex; flex-direction: column; gap: 8px; }
 .strategy-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-input); border-radius: var(--radius); cursor: pointer; transition: all var(--transition); }
 .strategy-option:hover { border-color: var(--text-muted); }
+.strategy-option.unavailable { opacity: 0.6; }
+.strategy-option.unavailable .strategy-name { text-decoration: line-through; }
 .strategy-option.active { border-color: var(--primary-500); background: var(--primary-50); }
 .strategy-option input { margin-top: 3px; }
 .strategy-option span { display: flex; flex-direction: column; }

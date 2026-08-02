@@ -263,3 +263,56 @@ func TestRoleRank(t *testing.T) {
 		t.Error("role ranks are not strictly ordered owner>admin>developer>viewer")
 	}
 }
+
+// A directory handle is stored through slug.Make (BeforeCreate), but the
+// "have we seen this user?" lookup was a plain lowercase, so a handle that
+// slugifies to something else missed the existing account and then collided with
+// it on insert — the unique index rejected the row and the sign-in failed.
+func TestProvisionHandleNormalisation(t *testing.T) {
+	db := newTestDB(t)
+	users := repositories.NewUserRepository(db)
+
+	// Someone already holds the slugified form of the directory handle.
+	if err := users.Create(&models.User{
+		Name: "Jane Doe", Email: "jane@example.com", Username: "j.doe",
+		PasswordHash: "x", Role: models.SystemRoleUser, Active: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	seeded, err := users.FindByEmail("jane@example.com")
+	if err != nil {
+		t.Fatalf("seed lookup: %v", err)
+	}
+	if seeded.Username != "j-doe" {
+		t.Fatalf("stored handle = %q, want the slugified %q", seeded.Username, "j-doe")
+	}
+
+	svc := newService(t, db, &fakeAuth{})
+	// The same person signing in through the directory, same handle, same email.
+	u, err := svc.provision(enterprise.LDAPIdentity{Username: "J.Doe", Email: "jane@example.com", Name: "Jane Doe"})
+	if err != nil {
+		t.Fatalf("provision matched no one and failed: %v", err)
+	}
+	if u.ID != seeded.ID {
+		t.Fatalf("provisioned a second account (id %d) for the existing user (id %d)", u.ID, seeded.ID)
+	}
+}
+
+// A directory handle that is reserved must not be stored verbatim: BeforeCreate
+// trusts a supplied username, so nothing else would stop "admin" from being
+// claimed — the derived path deliberately avoids the reserved set.
+func TestProvisionReservedHandle(t *testing.T) {
+	db := newTestDB(t)
+	svc := newService(t, db, &fakeAuth{})
+
+	u, err := svc.provision(enterprise.LDAPIdentity{Username: "admin", Email: "ops@example.com", Name: "Ops"})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if u.Username == "admin" {
+		t.Fatal("claimed the reserved handle \"admin\"")
+	}
+	if u.Username != "admin-1" {
+		t.Fatalf("handle = %q, want the suffixed %q", u.Username, "admin-1")
+	}
+}

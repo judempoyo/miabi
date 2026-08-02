@@ -6,6 +6,7 @@ package mwcatalog
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrInvalidRule is returned when a rule fails validation against its
@@ -90,6 +91,27 @@ func validateField(f Field, v any) error {
 	case FieldInts:
 		if !isIntSlice(v) {
 			return fmt.Errorf("%w: %q must be a list of whole numbers", ErrInvalidRule, f.Key)
+		}
+	case FieldPairs:
+		if !isStringSlice(v) {
+			return fmt.Errorf("%w: %q must be a list of strings", ErrInvalidRule, f.Key)
+		}
+		// Goma splits each entry on the first colon, so a second one silently
+		// becomes part of the target name. Reject it here rather than let the
+		// gateway forward a header nobody meant to name.
+		for _, e := range v.([]any) {
+			s, _ := e.(string)
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("%w: %q has an empty entry", ErrInvalidRule, f.Key)
+			}
+			if strings.Count(s, ":") > 1 {
+				return fmt.Errorf("%w: %q entry %q may contain at most one \":\"", ErrInvalidRule, f.Key, s)
+			}
+			if i := strings.Index(s, ":"); i >= 0 {
+				if strings.TrimSpace(s[:i]) == "" || strings.TrimSpace(s[i+1:]) == "" {
+					return fmt.Errorf("%w: %q entry %q must be \"source: target\" or just \"source\"", ErrInvalidRule, f.Key, s)
+				}
+			}
 		}
 	case FieldUsers:
 		if err := validateUsers(f.Key, v); err != nil {

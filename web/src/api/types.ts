@@ -493,6 +493,7 @@ export interface OAuthProvider {
   allowed_domains?: string
   email_claim?: string
   name_claim?: string
+  username_claim?: string
   default_workspace_id?: number | null
   default_role?: string
   created_at?: string
@@ -1061,6 +1062,8 @@ export type MiddlewareFieldType =
   | 'enum'
   | 'users'
   | 'map'
+  // A []string of Goma "source: target" mappings, edited as two inputs per row.
+  | 'pairs'
   | 'object'
   | 'list'
 
@@ -1075,6 +1078,17 @@ export interface MiddlewareField {
   help?: string
   // Sub-schema for `list` rows and structured `object` groups.
   fields?: MiddlewareField[]
+
+  // Form presentation, supplied per field by the server catalog so the same
+  // editor can label a setHeaders row "Header → value" and a jwt forwardHeaders
+  // row "Header → claim path".
+  placeholder?: string
+  key_label?: string
+  value_label?: string
+  key_placeholder?: string
+  value_placeholder?: string
+  add_label?: string
+  value_optional?: boolean
 }
 
 export interface MiddlewareDescriptor {

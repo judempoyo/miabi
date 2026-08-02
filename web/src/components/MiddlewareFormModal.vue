@@ -28,9 +28,10 @@ const saving = ref(false)
 const descriptors = computed(() => catalog.value?.types ?? [])
 const presets = computed(() => catalog.value?.presets ?? [])
 const descriptor = computed<MiddlewareDescriptor | undefined>(() => descriptors.value.find((d) => d.type === form.value.type))
-// Fields rendered in the schema form. A free-form object with no sub-schema (rare:
-// jwt forwardHeaders, rateLimit keyStrategy) has no form editor; it is left out of
-// the form and its stored value is preserved unchanged on save.
+// Fields rendered in the schema form. A free-form object with no sub-schema has
+// no form editor; it is left out of the form and its stored value is preserved
+// unchanged on save. Every catalogued type now declares a sub-schema, so this
+// only bites an uncatalogued rule edited through the advanced box.
 const isBareObject = (f: MwField) => f.type === 'object' && !(f.fields && f.fields.length)
 const fields = computed<MwField[]>(() => (descriptor.value?.fields ?? []).filter((f) => !isBareObject(f)))
 const isCatalogued = computed(() => !!descriptor.value)
@@ -59,7 +60,7 @@ async function ensureCatalog() {
 function defaultsFor(d?: MiddlewareDescriptor): Record<string, any> {
   const r: Record<string, any> = {}
   for (const f of d?.fields ?? []) {
-    if (f.type === 'users' || f.type === 'list') r[f.key] = []
+    if (f.type === 'users' || f.type === 'list' || f.type === 'pairs') r[f.key] = []
     else if (f.type === 'map' || f.type === 'object') r[f.key] = {}
     else if (f.default !== undefined && f.default !== null) r[f.key] = f.default
   }

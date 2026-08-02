@@ -86,6 +86,7 @@ export interface OAuthProviderPayload {
   allowed_domains?: string
   email_claim?: string
   name_claim?: string
+  username_claim?: string
   default_workspace_id?: number
   default_role?: string
 }

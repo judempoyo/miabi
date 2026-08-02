@@ -1949,9 +1949,11 @@ func (s *Service) EnsurePublished(ctx context.Context, appID uint) error {
 		}
 	}
 	if !samePortSet(want, live) {
-		// A binding was added or removed since the last deploy: recreate so the
-		// container publishes exactly the approved set. Rolling, so no downtime;
-		// swapAndRelease re-syncs the route on success.
+		// A binding was added or removed since the last deploy: redeploy so the
+		// container publishes exactly the approved set. This asks for rolling, but
+		// the deploy worker downgrades it to recreate whenever host ports are
+		// published — two containers cannot hold the same host port, so a rolling
+		// swap would fail on the port the running container still owns.
 		_, derr := s.Redeploy(app)
 		return derr
 	}

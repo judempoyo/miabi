@@ -152,7 +152,7 @@ async function copy(text: string, key: string) {
           </button>
         </div>
         <p class="hint">
-          <a href="/request-token" target="_blank" rel="noopener">Create a CLI token →</a>
+          <a href="/api-keys" target="_blank" rel="noopener">Create a CLI token →</a>
         </p>
       </div>
     </div>
