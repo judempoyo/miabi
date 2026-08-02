@@ -20,6 +20,7 @@ import ContainerProcesses from '@/components/ContainerProcesses.vue'
 import LogViewer from '@/components/LogViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import MetadataCard from '@/components/MetadataCard.vue'
+import EnvVarModal from '@/components/EnvVarModal.vue'
 import AppAccessPanel from '@/components/AppAccessPanel.vue'
 import type { Application, AppOverview, Deployment, Release, AppEnvVar, Route, Network, Stack, Volume, StatsSample, Registry, GitRepository, AppEvent, AppPort, PortBinding, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, DatabaseInstance, LogicalDatabase, NodePlacement, PipelineDefinition } from '@/api/types'
 
@@ -1131,12 +1132,11 @@ function openEnvEdit(e: AppEnvVar) {
   envForm.value = { key: e.key, value: e.is_secret ? '' : e.value, secret: e.is_secret }
   showEnvModal.value = true
 }
-async function saveEnv() {
-  const key = envForm.value.key.trim()
-  if (!wid.value || !key) return
+async function saveEnv(v: { key: string; value: string; secret: boolean }) {
+  if (!wid.value || !v.key) return
   savingEnv.value = true
   try {
-    await appApi.setEnvVar(wid.value, appId.value, key, envForm.value.value, envForm.value.secret)
+    await appApi.setEnvVar(wid.value, appId.value, v.key, v.value, v.secret)
     notify.success((editingEnvKey.value ? 'Variable updated' : 'Variable added') + changeNote())
     showEnvModal.value = false
     loadApp()
@@ -2762,6 +2762,16 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Delete application -->
     <Teleport to="body">
+      <EnvVarModal
+        :open="showEnvModal"
+        :editing-key="editingEnvKey"
+        :initial="envForm"
+        :saving="savingEnv"
+        :apply-note="isDeployed ? 'Applies on the next deploy.' : ''"
+        @close="showEnvModal = false"
+        @save="saveEnv"
+      />
+
       <div v-if="showDelete && app" class="modal-overlay" @click.self="showDelete = false">
         <div class="modal">
           <div class="modal-header">
@@ -2884,57 +2894,6 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Add / update env var -->
     <Teleport to="body">
-      <div v-if="showEnvModal" class="modal-overlay" @click.self="showEnvModal = false">
-        <div class="modal" style="max-width: 480px; width: 100%">
-          <div class="modal-header">
-            <h3>{{ editingEnvKey ? 'Update variable' : 'Add variable' }}</h3>
-            <button class="btn-icon btn-icon-muted" aria-label="Close" @click="showEnvModal = false"><span class="mdi mdi-close"></span></button>
-          </div>
-          <form @submit.prevent="saveEnv">
-            <div class="modal-body">
-              <div class="form-group">
-                <label class="form-label">Key</label>
-                <input
-                  v-model="envForm.key"
-                  class="form-input mono-input"
-                  :readonly="!!editingEnvKey"
-                  spellcheck="false"
-                  autocapitalize="off"
-                  autocomplete="off"
-                  placeholder="DATABASE_URL"
-                  required
-                  :autofocus="!editingEnvKey"
-                />
-                <p v-if="editingEnvKey" class="form-hint">The key can't be changed. Delete and re-add to rename.</p>
-              </div>
-              <div class="form-group">
-                <label class="form-label">
-                  Value
-                  <span v-if="editingEnvKey && envForm.secret" class="text-muted">— re-enter (secret values aren't shown)</span>
-                </label>
-                <textarea
-                  v-model="envForm.value"
-                  class="form-input mono-input"
-                  rows="3"
-                  spellcheck="false"
-                  :placeholder="envForm.secret ? 'super-secret-value' : `value or ${secretRefHint}`"
-                ></textarea>
-              </div>
-              <label class="checkbox-label" style="margin-bottom: 0">
-                <input type="checkbox" v-model="envForm.secret" />
-                <span><span class="mdi mdi-lock-outline"></span> Secret — encrypted at rest and masked in the UI</span>
-              </label>
-              <p class="form-hint">
-                Reference a workspace secret with <code>{{ secretRefHint }}</code>.{{ isDeployed ? ' Applies on the next deploy.' : '' }}
-              </p>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" @click="showEnvModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="savingEnv || !envForm.key.trim()">{{ savingEnv ? 'Saving…' : (editingEnvKey ? 'Update' : 'Add variable') }}</button>
-            </div>
-          </form>
-        </div>
-      </div>
     </Teleport>
 
     <!-- Import .env -->

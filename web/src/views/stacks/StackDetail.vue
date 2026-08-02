@@ -7,6 +7,7 @@ import { stackApi, type StackActionResult } from '@/api/stacks'
 import { appApi } from '@/api/apps'
 import type { Stack, Application, StackEnvVar, AppEvent } from '@/api/types'
 import MetadataCard from '@/components/MetadataCard.vue'
+import EnvVarModal from '@/components/EnvVarModal.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const route = useRoute()
@@ -29,7 +30,12 @@ const busyAction = ref('')
 const deleteWithApps = ref(false)
 const selectedAppId = ref<number | null>(null)
 const editForm = ref({ name: '', description: '' })
-const newEnv = ref({ key: '', value: '', secret: false })
+// Add/update env var modal — the same component the app Environment tab uses.
+// editingEnvKey is set while updating an existing variable (null when adding).
+const showEnvModal = ref(false)
+const editingEnvKey = ref<string | null>(null)
+const envForm = ref({ key: '', value: '', secret: false })
+const savingEnv = ref(false)
 const showEnvImport = ref(false)
 const envImport = ref({ content: '', secret: false })
 const importingEnv = ref(false)
@@ -163,15 +169,31 @@ async function confirmRemoveApp() {
   }
 }
 
-async function setEnv() {
-  if (!wid.value || !newEnv.value.key.trim()) return
+// openEnvModal opens the modal to create a new variable; openEnvEdit loads an
+// existing one for update (secret values aren't returned, so they're re-entered).
+function openEnvModal() {
+  editingEnvKey.value = null
+  envForm.value = { key: '', value: '', secret: false }
+  showEnvModal.value = true
+}
+function openEnvEdit(v: StackEnvVar) {
+  editingEnvKey.value = v.key
+  envForm.value = { key: v.key, value: v.is_secret ? '' : v.value, secret: v.is_secret }
+  showEnvModal.value = true
+}
+
+async function saveEnv(v: { key: string; value: string; secret: boolean }) {
+  if (!wid.value || !v.key) return
+  savingEnv.value = true
   try {
-    await stackApi.setEnvVar(wid.value, stackId.value, newEnv.value.key.trim(), newEnv.value.value, newEnv.value.secret)
-    notify.success('Variable saved — applies on each app’s next deploy')
-    newEnv.value = { key: '', value: '', secret: false }
+    await stackApi.setEnvVar(wid.value, stackId.value, v.key, v.value, v.secret)
+    notify.success((editingEnvKey.value ? 'Variable updated' : 'Variable added') + ' — applies on each app’s next deploy')
+    showEnvModal.value = false
     envVars.value = (await stackApi.envVars(wid.value, stackId.value)).data.data ?? []
   } catch (e) {
     notify.apiError(e)
+  } finally {
+    savingEnv.value = false
   }
 }
 
@@ -183,10 +205,6 @@ async function deleteEnv(key: string) {
   } catch (e) {
     notify.apiError(e)
   }
-}
-
-function editEnv(v: StackEnvVar) {
-  newEnv.value = { key: v.key, value: v.is_secret ? '' : v.value, secret: v.is_secret }
 }
 
 async function importEnv() {
@@ -324,7 +342,10 @@ const appName = (id: number) => allApps.value.find((a) => a.id === id)?.name ?? 
     <div class="card" style="margin-top: 20px">
       <div class="card-header">
         <h3>Shared environment</h3>
-        <button v-if="ws.canEdit" class="btn btn-secondary btn-sm" @click="showEnvImport = true"><span class="mdi mdi-import"></span> Import .env</button>
+        <div class="flex items-center gap-2">
+          <button v-if="ws.canEdit" class="btn btn-secondary btn-sm" @click="showEnvImport = true"><span class="mdi mdi-import"></span> Import .env</button>
+          <button v-if="ws.canEdit" class="btn btn-primary btn-sm" @click="openEnvModal"><span class="mdi mdi-plus"></span> Add variable</button>
+        </div>
       </div>
       <div class="card-body">
         <p class="text-muted text-sm" style="margin-top: 0">Injected into every app in the stack on its next deploy. An app's own variable with the same key wins.</p>
@@ -334,18 +355,15 @@ const appName = (id: number) => allApps.value.find((a) => a.id === id)?.name ?? 
               <td class="cell-title" style="font-family: monospace">{{ v.key }}</td>
               <td class="cell-sub" style="font-family: monospace">{{ v.is_secret ? '••••••••' : v.value }}</td>
               <td class="text-right">
-                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Edit" aria-label="Edit" @click="editEnv(v)"><span class="mdi mdi-pencil-outline"></span></button>
+                <button v-if="ws.canEdit" class="btn-icon btn-icon-muted" title="Edit" aria-label="Edit" @click="openEnvEdit(v)"><span class="mdi mdi-pencil-outline"></span></button>
                 <button v-if="ws.canEdit" class="btn-icon btn-icon-danger" title="Delete" aria-label="Delete" @click="deleteEnv(v.key)"><span class="mdi mdi-delete-outline"></span></button>
               </td>
             </tr>
           </tbody>
         </table>
-        <form v-if="ws.canEdit" class="flex items-center gap-2" @submit.prevent="setEnv">
-          <input v-model="newEnv.key" class="form-input" placeholder="KEY" style="max-width: 200px" aria-label="Variable key" />
-          <input v-model="newEnv.value" class="form-input" placeholder="value" style="max-width: 240px" aria-label="Variable value" />
-          <label class="checkbox-label"><input type="checkbox" v-model="newEnv.secret" /> secret</label>
-          <button type="submit" class="btn btn-secondary btn-sm">Set</button>
-        </form>
+        <p v-if="!envVars.length" class="text-muted text-sm" style="margin-bottom: 0">
+          No shared variables yet.
+        </p>
       </div>
     </div>
 
@@ -375,6 +393,16 @@ const appName = (id: number) => allApps.value.find((a) => a.id === id)?.name ?? 
     </div>
 
     <Teleport to="body">
+      <EnvVarModal
+        :open="showEnvModal"
+        :editing-key="editingEnvKey"
+        :initial="envForm"
+        :saving="savingEnv"
+        apply-note="Applies to every app in the stack on its next deploy."
+        @close="showEnvModal = false"
+        @save="saveEnv"
+      />
+
       <div v-if="showAdd" class="modal-overlay" @click.self="showAdd = false">
         <div class="modal">
           <div class="modal-header">

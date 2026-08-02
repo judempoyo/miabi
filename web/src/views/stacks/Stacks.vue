@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -13,6 +13,19 @@ const router = useRouter()
 const { currentWorkspaceId } = storeToRefs(ws)
 
 const items = ref<Stack[]>([])
+const search = ref('')
+// Client-side filter (the list isn't paginated) over the names shown in the
+// table plus the description, so searching for what you can read works.
+const filtered = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return items.value
+  return items.value.filter((s) =>
+    s.name.toLowerCase().includes(q) ||
+    (s.display_name || '').toLowerCase().includes(q) ||
+    (s.description || '').toLowerCase().includes(q) ||
+    (s.docker_name || '').toLowerCase().includes(q),
+  )
+})
 const loading = ref(false)
 const showCreate = ref(false)
 const showImport = ref(false)
@@ -130,11 +143,31 @@ async function runImport() {
         <p>Create a stack to group related applications and manage their containers together.</p>
         <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="openCreate">Create a stack</button>
       </div>
-      <div v-else class="table-wrapper">
+      <template v-else>
+        <div class="card-body toolbar">
+          <div class="search">
+            <span class="mdi mdi-magnify"></span>
+            <input
+              v-model="search"
+              class="form-input"
+              type="search"
+              aria-label="Search stacks"
+              placeholder="Search stacks by name, description, or Docker name…"
+            />
+          </div>
+          <span class="text-muted text-sm">{{ filtered.length }} of {{ items.length }}</span>
+        </div>
+
+        <div v-if="filtered.length === 0" class="empty-state" style="padding: 40px">
+          <span class="mdi mdi-magnify" style="font-size: 36px; color: var(--text-muted)"></span>
+          <p>No stacks match “{{ search }}”.</p>
+        </div>
+
+        <div v-else class="table-wrapper">
         <table>
           <thead><tr><th>Stack</th><th>Docker name</th><th>Apps</th><th>Status</th></tr></thead>
           <tbody>
-            <tr v-for="s in items" :key="s.id" class="row-clickable" @click="router.push(`/stacks/${s.id}`)">
+            <tr v-for="s in filtered" :key="s.id" class="row-clickable" @click="router.push(`/stacks/${s.id}`)">
               <td>
                 <div class="cell-id">
                   <span class="avatar avatar-sm"><span class="mdi mdi-layers-outline" style="font-size: 14px"></span></span>
@@ -154,7 +187,8 @@ async function runImport() {
             </tr>
           </tbody>
         </table>
-      </div>
+        </div>
+      </template>
     </div>
 
     <Teleport to="body">
@@ -215,4 +249,8 @@ async function runImport() {
 <style scoped>
 .subtitle { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
 .text-muted { color: var(--text-muted); }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.search { position: relative; flex: 1; max-width: 360px; }
+.search .mdi { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.search .form-input { padding-left: 32px; }
 </style>
