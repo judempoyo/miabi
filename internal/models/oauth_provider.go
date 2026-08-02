@@ -45,10 +45,15 @@ type OAuthProvider struct {
 	// OrganizationID is the realm this provider belongs to (nullable → default org).
 	OrganizationID *uint `json:"organization_id" gorm:"index"`
 
-	// EmailClaim / NameClaim map a generic OIDC userinfo claim onto the user's
-	// email / display name. Empty falls back to the standard "email" / "name".
+	// EmailClaim / NameClaim / UsernameClaim map a generic OIDC userinfo claim
+	// onto the user's email / display name / handle. Empty falls back to the
+	// standard "email" / "name" / "preferred_username".
 	EmailClaim string `json:"email_claim"`
 	NameClaim  string `json:"name_claim"`
+	// UsernameClaim names the claim carrying the handle the user is known by at
+	// the provider. Without it Miabi derives one from the email local part, so an
+	// account whose directory handle differs from its mailbox gets the wrong one.
+	UsernameClaim string `json:"username_claim"`
 
 	// DefaultWorkspaceID + DefaultRole auto-join a newly registered SSO user to a
 	// workspace with a role on first login. Nil = no auto-join (user is invited

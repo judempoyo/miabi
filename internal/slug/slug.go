@@ -101,6 +101,20 @@ func IsAvailableHandle(s string) bool {
 	return IsValid(s) && !IsReserved(s)
 }
 
+// Available returns a free handle for name, or "" when name is blank, reduces to
+// nothing, or the lookup fails — the caller then falls back to whatever it
+// derives handles from.
+func Available(name string, exists func(string) (bool, error)) string {
+	if Make(name, "") == "" {
+		return ""
+	}
+	handle, err := UniqueAvailable(name, "", exists)
+	if err != nil {
+		return ""
+	}
+	return handle
+}
+
 // UniqueAvailable returns a non-reserved slug for name, unique under exists. It
 // is Unique with an extra suffix bump whenever a candidate lands on a reserved
 // handle, so backfills and auto-derivation never produce a reserved handle.

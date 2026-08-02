@@ -22,6 +22,7 @@ import (
 	"github.com/jkaninda/logger"
 	"github.com/miabi-io/miabi/internal/models"
 	"github.com/miabi-io/miabi/internal/services/crypto"
+	"github.com/miabi-io/miabi/internal/slug"
 	"github.com/miabi-io/miabi/internal/storage/repositories"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
@@ -55,6 +56,9 @@ type UserInfo struct {
 	Sub   string `json:"sub"`
 	Email string `json:"email"`
 	Name  string `json:"name"`
+	// Username is the handle the provider knows the user by. Empty when the
+	// provider sends none, in which case Miabi derives one from the email.
+	Username string `json:"preferred_username"`
 }
 
 type Service struct {
@@ -284,6 +288,7 @@ func (s *Service) Authenticate(ctx context.Context, p *models.OAuthProvider, cod
 	newUser := &models.User{
 		Name:            name,
 		Email:           email,
+		Username:        s.availableUsername(info.Username),
 		PasswordHash:    unusablePassword(),
 		Role:            role,
 		Active:          true,
@@ -294,6 +299,12 @@ func (s *Service) Authenticate(ctx context.Context, p *models.OAuthProvider, cod
 	}
 	s.autoJoinWorkspace(p, newUser.ID)
 	return newUser, nil
+}
+
+// availableUsername turns the handle a provider asserted into one that can
+// actually be stored, or "" to let User.BeforeCreate derive one from the email.
+func (s *Service) availableUsername(claimed string) string {
+	return slug.Available(claimed, s.users.ExistsByUsername)
 }
 
 // autoJoinWorkspace adds a freshly registered SSO user to the provider's
@@ -326,7 +337,7 @@ func (s *Service) autoJoinWorkspace(p *models.OAuthProvider, userID uint) {
 // provider (e.g. SAML). Mirrors the OAuth auto-register policy: the first user is
 // the platform admin, the asserted email is treated as verified, and the account
 // uses an unusable password. Returns ErrAccountDisabled for a disabled user.
-func (s *Service) ProvisionSSOUser(ctx context.Context, email, name string) (*models.User, error) {
+func (s *Service) ProvisionSSOUser(ctx context.Context, email, name, username string) (*models.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
 		return nil, ErrNoEmail
@@ -347,8 +358,9 @@ func (s *Service) ProvisionSSOUser(ctx context.Context, email, name string) (*mo
 	}
 	now := time.Now()
 	user := &models.User{
-		Name: name, Email: email, PasswordHash: unusablePassword(),
-		Role: role, Active: true, EmailVerifiedAt: &now,
+		Name: name, Email: email, Username: s.availableUsername(username),
+		PasswordHash: unusablePassword(),
+		Role:         role, Active: true, EmailVerifiedAt: &now,
 	}
 	if err := s.users.Create(user); err != nil {
 		return nil, err
@@ -416,9 +428,10 @@ func (s *Service) exchange(ctx context.Context, p *models.OAuthProvider, code, r
 		return nil, fmt.Errorf("userinfo decode: %w", err)
 	}
 	info := UserInfo{
-		Sub:   stringClaim(claims, "sub"),
-		Email: firstClaim(claims, p.EmailClaim, "email"),
-		Name:  firstClaim(claims, p.NameClaim, "name"),
+		Sub:      stringClaim(claims, "sub"),
+		Email:    firstClaim(claims, p.EmailClaim, "email"),
+		Name:     firstClaim(claims, p.NameClaim, "name"),
+		Username: firstClaim(claims, p.UsernameClaim, "preferred_username"),
 	}
 	return &info, nil
 }
