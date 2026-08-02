@@ -38,6 +38,12 @@ const (
 	FieldEnum     = "enum"     // one of Options
 	FieldUsers    = "users"    // basicAuth users: [{username, password}]
 	FieldMap      = "map"      // map<string,string> key/value editor (e.g. setHeaders)
+	// FieldPairs is a []string whose entries are Goma's "source: target" mapping
+	// syntax, with a bare "source" meaning "keep the same name" (forwardAuth's
+	// authResponseHeaders and authResponseHeadersAsParams). Stored as strings
+	// because that is Goma's wire format; edited as two inputs per row, because
+	// nobody should have to know the colon convention to use the UI.
+	FieldPairs = "pairs"
 	// FieldObject is a nested object. With Fields it renders a structured sub-form
 	// (e.g. cors); without Fields it is a free-form map passed through unchecked.
 	FieldObject = "object"
@@ -58,6 +64,23 @@ type Field struct {
 	Help     string   `json:"help,omitempty"`
 	// Fields is the sub-schema for FieldList rows and structured FieldObject groups.
 	Fields []Field `json:"fields,omitempty"`
+
+	// --- form presentation ---
+	// Placeholder is the example shown in an empty scalar or tag input.
+	Placeholder string `json:"placeholder,omitempty"`
+	// KeyLabel/ValueLabel name the two columns of a FieldMap or FieldPairs editor.
+	// They differ per middleware — a setHeaders row is "Header → value", a JWT
+	// forwardHeaders row is "Header → claim path" — and getting them wrong is how
+	// a form teaches the wrong mental model.
+	KeyLabel         string `json:"key_label,omitempty"`
+	ValueLabel       string `json:"value_label,omitempty"`
+	KeyPlaceholder   string `json:"key_placeholder,omitempty"`
+	ValuePlaceholder string `json:"value_placeholder,omitempty"`
+	// AddLabel is the "+ Add …" button's noun.
+	AddLabel string `json:"add_label,omitempty"`
+	// ValueOptional marks a FieldPairs whose target may be left blank, meaning
+	// "pass through under the same name".
+	ValueOptional bool `json:"value_optional,omitempty"`
 }
 
 // Descriptor declares one curated Goma middleware type.
@@ -110,12 +133,19 @@ var registry = []Descriptor{
 			{Key: "publicKey", Label: "Public key", Type: FieldString, Help: "PEM public key for asymmetric algorithms (RS*/ES*)."},
 			{Key: "jwksUrl", Label: "JWKS URL", Type: FieldString, Help: "Endpoint serving the signing keys."},
 			{Key: "jwksFile", Label: "JWKS file", Type: FieldString, Help: "Path to a local JWKS file."},
-			{Key: "algorithms", Label: "Algorithms", Type: FieldStrings, Help: "Accepted signing algorithms, e.g. RS256, ES256. Defaults to a safe set for the configured key type."},
+			{Key: "algorithms", Label: "Algorithms", Type: FieldStrings, Placeholder: "RS256", AddLabel: "algorithm",
+				Help: "Accepted signing algorithms. Empty uses a safe set for the key type you configured."},
 			{Key: "issuer", Label: "Issuer", Type: FieldString, Help: "Required iss claim."},
 			{Key: "audience", Label: "Audience", Type: FieldString, Help: "Required aud claim."},
 			{Key: "claimsExpression", Label: "Claims expression", Type: FieldString, Help: "Expression the token claims must satisfy."},
-			{Key: "forwardAuthorization", Label: "Forward Authorization header", Type: FieldBool},
-			{Key: "forwardHeaders", Label: "Forward claim headers", Type: FieldMap, Help: "Header name → claim path, forwarded to the backend."},
+			{Key: "forwardAuthorization", Label: "Forward Authorization header", Type: FieldBool,
+				Help: "Pass the original Authorization header on to the app instead of stripping it."},
+			{Key: "forwardHeaders", Label: "Forward claims as headers", Type: FieldMap,
+				KeyLabel: "Header", ValueLabel: "Claim path",
+				KeyPlaceholder: "X-User-ID", ValuePlaceholder: "sub", AddLabel: "claim header",
+				Help: "Each row sends one claim from the verified token to your app as a request header. " +
+					"Use dot notation for nested claims (user.role, profile.department); booleans arrive as \"true\"/\"false\", " +
+					"and a claim the token doesn't carry is skipped rather than sent empty."},
 		},
 	},
 	{
@@ -128,10 +158,20 @@ var registry = []Descriptor{
 			{Key: "authSignIn", Label: "Sign-in URL", Type: FieldString, Help: "Where to redirect unauthenticated users."},
 			{Key: "forwardHostHeaders", Label: "Forward host headers", Type: FieldBool},
 			{Key: "insecureSkipVerify", Label: "Skip TLS verification", Type: FieldBool, Help: "Don't verify the auth service's TLS certificate."},
-			{Key: "authRequestHeaders", Label: "Auth request headers", Type: FieldStrings, Help: "Headers copied from the request to the auth service."},
-			{Key: "authResponseHeaders", Label: "Auth response headers", Type: FieldStrings, Help: "Headers copied from the auth response to the backend."},
-			{Key: "authResponseHeadersAsParams", Label: "Auth response headers as params", Type: FieldStrings},
-			{Key: "addAuthCookiesToResponse", Label: "Add auth cookies to response", Type: FieldStrings},
+			{Key: "authRequestHeaders", Label: "Send to the auth service", Type: FieldStrings,
+				Placeholder: "Authorization", AddLabel: "header",
+				Help: "Request headers copied onto the call to the auth service. Empty sends the default set."},
+			{Key: "authResponseHeaders", Label: "Auth response → request headers", Type: FieldPairs,
+				KeyLabel: "Auth response header", ValueLabel: "Request header", ValueOptional: true,
+				KeyPlaceholder: "x-user-id", ValuePlaceholder: "X-Auth-User-ID", AddLabel: "header mapping",
+				Help: "Headers the auth service returns, forwarded to your app. Leave the second column blank to keep the same name."},
+			{Key: "authResponseHeadersAsParams", Label: "Auth response → query parameters", Type: FieldPairs,
+				KeyLabel: "Auth response header", ValueLabel: "Query parameter", ValueOptional: true,
+				KeyPlaceholder: "x-user-id", ValuePlaceholder: "userId", AddLabel: "parameter mapping",
+				Help: "Same idea, but the value arrives as a query parameter instead of a header."},
+			{Key: "addAuthCookiesToResponse", Label: "Cookies to return to the client", Type: FieldStrings,
+				Placeholder: "session_id", AddLabel: "cookie",
+				Help: "Cookies set by the auth service that should reach the browser. Empty returns all of them."},
 		},
 	},
 	{
@@ -172,7 +212,9 @@ var registry = []Descriptor{
 		Category:    CategorySecurity,
 		Fields: []Field{
 			{Key: "action", Label: "Action", Type: FieldEnum, Required: true, Options: []string{"ALLOW", "DENY"}, Default: "ALLOW"},
-			{Key: "sourceRanges", Label: "Source ranges", Type: FieldStrings, Required: true, Help: "IPs or CIDRs, e.g. 10.0.0.0/8, 203.0.113.5."},
+			{Key: "sourceRanges", Label: "Source ranges", Type: FieldStrings, Required: true,
+				Placeholder: "10.0.0.0/8", AddLabel: "range",
+				Help: "Client IPs or CIDR ranges this policy applies to. Press Enter or comma to add each one."},
 		},
 	},
 	{
@@ -234,6 +276,41 @@ var registry = []Descriptor{
 		},
 	},
 	{
+		Type:        "rewriteRegex",
+		DisplayName: "Rewrite path (regex)",
+		Description: "Rewrite the request path with a regular expression before it reaches the app.",
+		Category:    CategoryTransform,
+		Fields: []Field{
+			{Key: "pattern", Label: "Pattern", Type: FieldString, Required: true, Placeholder: "^/old/(.*)",
+				Help: "Regular expression matched against the request path."},
+			{Key: "replacement", Label: "Replacement", Type: FieldString, Required: true, Placeholder: "/new/$1",
+				Help: "Replacement path. Use $1, $2… for the pattern's capture groups."},
+		},
+	},
+	{
+		Type:        "httpCache",
+		DisplayName: "HTTP cache",
+		Description: "Cache responses at the gateway so repeat requests never reach the app.",
+		Category:    CategoryTraffic,
+		Fields: []Field{
+			{Key: "maxTtl", Label: "Max TTL (s)", Type: FieldInt, Help: "Longest a response is kept, in seconds."},
+			{Key: "maxStale", Label: "Max stale (s)", Type: FieldInt,
+				Help: "How long a stale entry may still be served while it refreshes."},
+			{Key: "memoryLimit", Label: "Memory limit", Type: FieldString, Placeholder: "100MB",
+				Help: "Cap on the in-memory cache, e.g. 100MB."},
+			{Key: "cacheableStatusCodes", Label: "Cacheable statuses", Type: FieldInts, Placeholder: "200", AddLabel: "status",
+				Help: "Response codes worth caching. Empty uses Goma's defaults."},
+			{Key: "excludedResponseCodes", Label: "Never cache statuses", Type: FieldStrings, Placeholder: "5xx", AddLabel: "status",
+				Help: "Codes or ranges to keep out of the cache, e.g. 5xx."},
+			{Key: "includeQueryInKey", Label: "Include query string in the cache key", Type: FieldBool,
+				Help: "Off means /page?a=1 and /page?a=2 share one cached response."},
+			{Key: "queryParamsToCache", Label: "Query parameters in the key", Type: FieldStrings, Placeholder: "page", AddLabel: "parameter",
+				Help: "Restrict the key to these parameters, so tracking parameters don't fragment the cache."},
+			{Key: "disableCacheStatusHeader", Label: "Hide the X-Cache-Status header", Type: FieldBool,
+				Help: "By default Goma reports HIT/MISS on each response."},
+		},
+	},
+	{
 		Type:        "addPrefix",
 		DisplayName: "Add path prefix",
 		Description: "Prepend a path prefix before forwarding the request to the app.",
@@ -256,7 +333,8 @@ var registry = []Descriptor{
 		Description: "Reject requests whose User-Agent matches any of the listed patterns.",
 		Category:    CategorySecurity,
 		Fields: []Field{
-			{Key: "userAgents", Label: "User agents", Type: FieldStrings, Required: true, Help: "Substrings matched case-insensitively, e.g. Googlebot, curl, python-requests."},
+			{Key: "userAgents", Label: "User agents", Type: FieldStrings, Required: true, Placeholder: "Googlebot", AddLabel: "pattern",
+				Help: "Substrings matched case-insensitively against the User-Agent header."},
 		},
 	},
 	{
@@ -265,8 +343,11 @@ var registry = []Descriptor{
 		Description: "Add, override or remove headers before the request reaches the app.",
 		Category:    CategoryTransform,
 		Fields: []Field{
-			{Key: "setHeaders", Label: "Set headers", Type: FieldMap, Help: "Header → value. An empty value removes a client-supplied header."},
-			{Key: "removeHeaders", Label: "Remove headers", Type: FieldStrings, Help: "Header names to drop before forwarding (applied before Set headers)."},
+			{Key: "setHeaders", Label: "Set headers", Type: FieldMap,
+				KeyLabel: "Header", ValueLabel: "Value", KeyPlaceholder: "X-Forwarded-User", ValuePlaceholder: "value", AddLabel: "header",
+				Help: "Set on the request before it reaches your app. An empty value removes a client-supplied header."},
+			{Key: "removeHeaders", Label: "Remove headers", Type: FieldStrings, Placeholder: "X-Powered-By", AddLabel: "header",
+				Help: "Dropped before forwarding, applied before Set headers."},
 		},
 		Validate: requireAnyOf("setHeaders", "removeHeaders"),
 	},
@@ -276,15 +357,18 @@ var registry = []Descriptor{
 		Description: "Add, override or remove headers on the response, and set CORS or cookies.",
 		Category:    CategoryTransform,
 		Fields: []Field{
-			{Key: "setHeaders", Label: "Set headers", Type: FieldMap, Help: "Header → value. An empty value removes a backend header."},
+			{Key: "setHeaders", Label: "Set headers", Type: FieldMap,
+				KeyLabel: "Header", ValueLabel: "Value", KeyPlaceholder: "X-Frame-Options", ValuePlaceholder: "DENY", AddLabel: "header",
+				Help: "Set on the response. An empty value removes a header your app sent."},
 			{Key: "cacheControl", Label: "Cache-Control", Type: FieldString, Help: "Value for the Cache-Control response header, e.g. no-store."},
-			{Key: "cacheStatuses", Label: "Cacheable statuses", Type: FieldInts, Help: "Status codes to cache, e.g. 200, 301."},
+			{Key: "cacheStatuses", Label: "Cacheable statuses", Type: FieldInts, Placeholder: "200", AddLabel: "status"},
 			{Key: "cors", Label: "CORS", Type: FieldObject, Fields: []Field{
 				{Key: "enabled", Label: "Enabled", Type: FieldBool},
-				{Key: "origins", Label: "Allowed origins", Type: FieldStrings, Help: "e.g. https://example.com. Cannot use * with credentials."},
-				{Key: "allowMethods", Label: "Allowed methods", Type: FieldStrings, Help: "e.g. GET, POST, OPTIONS."},
-				{Key: "allowedHeaders", Label: "Allowed headers", Type: FieldStrings},
-				{Key: "exposeHeaders", Label: "Exposed headers", Type: FieldStrings},
+				{Key: "origins", Label: "Allowed origins", Type: FieldStrings, Placeholder: "https://example.com", AddLabel: "origin",
+					Help: "Cannot be * when credentials are allowed."},
+				{Key: "allowMethods", Label: "Allowed methods", Type: FieldStrings, Placeholder: "GET", AddLabel: "method"},
+				{Key: "allowedHeaders", Label: "Allowed headers", Type: FieldStrings, Placeholder: "Content-Type", AddLabel: "header"},
+				{Key: "exposeHeaders", Label: "Exposed headers", Type: FieldStrings, Placeholder: "X-Request-Id", AddLabel: "header"},
 				{Key: "allowCredentials", Label: "Allow credentials", Type: FieldBool},
 				{Key: "maxAge", Label: "Max age (s)", Type: FieldInt, Help: "Preflight cache lifetime in seconds."},
 			}},

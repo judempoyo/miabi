@@ -210,3 +210,91 @@ func TestMergeKeptSecrets(t *testing.T) {
 		t.Fatalf("kept password decrypts to %v, want keepme", got)
 	}
 }
+
+// forwardAuth's response mappings are Goma's "source: target" strings. Goma
+// splits on the first colon, so a second one would silently rename the target to
+// something nobody asked for — reject it at the door instead.
+func TestForwardAuthMappingValidation(t *testing.T) {
+	ok := []any{"x-user-id: X-Auth-User-ID", "X-Auth-Email", "x-roles:X-Roles"}
+	if err := Validate("forwardAuth", map[string]any{
+		"authUrl":             "https://auth.example.com/verify",
+		"authResponseHeaders": ok,
+	}); err != nil {
+		t.Fatalf("valid mappings rejected: %v", err)
+	}
+
+	bad := map[string][]any{
+		"two colons":   {"x-user-id: X-Auth: extra"},
+		"empty source": {": X-Auth-User"},
+		"empty target": {"x-user-id: "},
+		"blank entry":  {"   "},
+	}
+	for name, v := range bad {
+		err := Validate("forwardAuth", map[string]any{
+			"authUrl":             "https://auth.example.com/verify",
+			"authResponseHeaders": v,
+		})
+		if err == nil {
+			t.Errorf("%s (%v) was accepted", name, v)
+		}
+	}
+}
+
+// The claim-forwarding map is header → claim path; both sides are plain strings,
+// and a non-string value must not reach Goma.
+func TestJWTForwardHeadersIsAStringMap(t *testing.T) {
+	if err := Validate("jwtAuth", map[string]any{
+		"secret": "s3cret",
+		"forwardHeaders": map[string]any{
+			"X-User-ID":   "sub",
+			"X-User-Role": "user.role",
+			"X-Is-Admin":  "permissions.admin",
+		},
+	}); err != nil {
+		t.Fatalf("valid forwardHeaders rejected: %v", err)
+	}
+	if err := Validate("jwtAuth", map[string]any{
+		"secret":         "s3cret",
+		"forwardHeaders": map[string]any{"X-Is-Admin": true},
+	}); err == nil {
+		t.Error("a non-string claim path was accepted")
+	}
+}
+
+// Every Goma middleware type Miabi means to support should have a descriptor —
+// an uncatalogued type can't be picked in the UI at all, only edited if one
+// already exists.
+func TestCatalogCoversGomaAuthTypes(t *testing.T) {
+	for _, typ := range []string{
+		"basicAuth", "jwtAuth", "forwardAuth", "ldapAuth",
+		"access", "accessPolicy", "bodyLimit", "rateLimit", "httpCache",
+		"redirect", "redirectRegex", "redirectScheme", "rewriteRegex", "addPrefix",
+		"userAgentBlock", "requestHeaders", "responseHeaders", "errorInterceptor", "geoBlock",
+	} {
+		if _, ok := Get(typ); !ok {
+			t.Errorf("no descriptor for %q", typ)
+		}
+	}
+}
+
+// Any editor with two columns needs both column labels, or the form falls back
+// to a generic "Key/Value" that describes neither side.
+func TestPairAndMapFieldsAreLabelled(t *testing.T) {
+	var check func(typ string, fields []Field)
+	check = func(typ string, fields []Field) {
+		for _, f := range fields {
+			if f.Type == FieldMap || f.Type == FieldPairs {
+				if f.KeyLabel == "" || f.ValueLabel == "" {
+					t.Errorf("%s.%s (%s) is missing a column label", typ, f.Key, f.Type)
+				}
+				if f.KeyPlaceholder == "" || f.ValuePlaceholder == "" {
+					t.Errorf("%s.%s (%s) is missing an example", typ, f.Key, f.Type)
+				}
+			}
+			check(typ, f.Fields)
+		}
+	}
+	for _, d := range All() {
+		check(d.Type, d.Fields)
+	}
+}
