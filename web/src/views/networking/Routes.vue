@@ -1,159 +1,30 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useNotificationStore } from '@/stores/notification'
 import { routeApi } from '@/api/routes'
-import { middlewareApi } from '@/api/middlewares'
-import { certificateApi } from '@/api/certificates'
 import { appApi } from '@/api/apps'
-import { domainApi } from '@/api/domains'
-import { parseYaml, toYaml } from '@/utils/yaml'
-import type { Route, Middleware, Application, AppPort, RouteTLSMode, Certificate, Domain } from '@/api/types'
+import type { Route, Application } from '@/api/types'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import RouteFormModal from '@/components/RouteFormModal.vue'
 
 const ws = useWorkspaceStore()
 const notify = useNotificationStore()
 const router = useRouter()
+const route = useRoute()
 const { currentWorkspaceId } = storeToRefs(ws)
 
 const items = ref<Route[]>([])
 const apps = ref<Application[]>([])
-// Registered workspace domains, for the guided host builder (domain dropdown).
-const domains = ref<Domain[]>([])
-// Host builder rows: each row is a registered domain + an optional subdomain.
-// Empty subdomain serves the domain at its root (apex). extraHosts holds any
-// host not under a registered domain (e.g. its domain was removed) so editing a
-// route never silently drops it.
-// Each row carries a stable id so v-for can key on identity, not array index —
-// otherwise removing a middle row reuses the wrong input's DOM/state.
-let hostRowSeq = 0
-const hostRows = ref<{ id: number; sub: string; domain: string }[]>([])
-const extraHosts = ref<string[]>([])
-// Declared ports of the form's selected app, for the target-port dropdown. The
-// apps list doesn't carry ports, so fetch the app detail on selection (cached).
-const appPorts = ref<AppPort[]>([])
-const portCache = new Map<number, AppPort[]>()
-async function loadAppPorts(appId: number | null) {
-  appPorts.value = []
-  if (!appId || !currentWorkspaceId.value) return
-  const cached = portCache.get(appId)
-  if (cached) { appPorts.value = cached; return }
-  try {
-    const ports = (await appApi.get(currentWorkspaceId.value, appId)).data.data?.ports ?? []
-    portCache.set(appId, ports)
-    appPorts.value = ports
-  } catch { /* leave empty → manual port input shown */ }
-}
-// User picked a different app: clear any chosen port and load the new app's ports.
-function onAppChange() {
-  form.value.target_port = undefined
-  loadAppPorts(form.value.application_id)
-}
-// Whether the chosen target port speaks HTTPS — the backend is then reached over
-// https and TLS verification is skipped for the internal address.
-const selectedPortHttps = computed(() => {
-  const tp = form.value.target_port
-  if (!tp) return false
-  return appPorts.value.some((p) => p.container_port === tp && (p.scheme || 'http') === 'https')
-})
-const middlewares = ref<Middleware[]>([])
-const certificates = ref<Certificate[]>([])
 const loading = ref(false)
 const showModal = ref(false)
-const saving = ref(false)
 const editing = ref<Route | null>(null)
+// Preselected application when the create form is opened from a deep link.
+const presetAppId = ref<number | null>(null)
 const toDelete = ref<Route | null>(null)
 const deleting = ref(false)
-
-interface RouteForm {
-  name: string
-  application_id: number | null
-  path: string
-  hosts: string
-  methods: string[]
-  middlewares: string[]
-  rewrite: string
-  target_port: number | undefined
-  tls_mode: RouteTLSMode
-  certificate_id: number | null
-  enabled: boolean
-}
-function emptyForm(): RouteForm {
-  return { name: '', application_id: null, path: '/', hosts: '', methods: [], middlewares: [], rewrite: '', target_port: undefined, tls_mode: 'acme', certificate_id: null, enabled: true }
-}
-const form = ref<RouteForm>(emptyForm())
-
-// HTTP methods offered as toggles; empty selection means "all methods".
-const allMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS']
-
-// --- Simple / Advanced routing config ---
-const formMode = ref<'simple' | 'advanced'>('simple')
-const advancedConfig = ref('')
-const yamlError = ref('')
-// Fields the simple form can represent; anything else is "advanced".
-const simpleKeys = new Set(['path', 'hosts', 'methods', 'middlewares', 'rewrite'])
-
-function simpleToYaml(): string {
-  const cfg: Record<string, unknown> = { path: form.value.path || '/' }
-  const hosts = splitCsv(form.value.hosts)
-  if (hosts.length) cfg.hosts = hosts
-  if (form.value.methods.length) cfg.methods = [...form.value.methods]
-  if (form.value.middlewares.length) cfg.middlewares = [...form.value.middlewares]
-  if (form.value.rewrite) cfg.rewrite = form.value.rewrite
-  return toYaml(cfg)
-}
-function yamlToSimple(text: string) {
-  const cfg = parseYaml(text)
-  form.value.path = (cfg.path as string) || '/'
-  form.value.hosts = Array.isArray(cfg.hosts) ? (cfg.hosts as string[]).join(', ') : ''
-  form.value.methods = Array.isArray(cfg.methods) ? (cfg.methods as string[]).map(String) : []
-  form.value.middlewares = Array.isArray(cfg.middlewares) ? (cfg.middlewares as string[]).map(String) : []
-  form.value.rewrite = (cfg.rewrite as string) || ''
-}
-function hasAdvancedKeys(cfg: Record<string, unknown>): boolean {
-  return Object.keys(cfg).some((k) => !simpleKeys.has(k))
-}
-function switchMode(mode: 'simple' | 'advanced') {
-  if (mode === formMode.value) return
-  yamlError.value = ''
-  if (mode === 'advanced') {
-    advancedConfig.value = simpleToYaml()
-  } else {
-    try {
-      const cfg = parseYaml(advancedConfig.value)
-      if (hasAdvancedKeys(cfg)) yamlError.value = 'Advanced-only fields will be dropped in Simple mode.'
-      yamlToSimple(advancedConfig.value)
-      parseHostsToRows() // reflect YAML hosts into the builder
-    } catch {
-      yamlError.value = 'Could not parse the YAML into the simple form.'
-      return
-    }
-  }
-  formMode.value = mode
-}
-
-async function load(id: number | null) {
-  if (!id) { items.value = []; return }
-  loading.value = true
-  try {
-    items.value = (await routeApi.list(id)).data.data ?? []
-    apps.value = (await appApi.list(id)).data.data ?? []
-    middlewares.value = (await middlewareApi.list(id)).data.data ?? []
-    certificates.value = (await certificateApi.list(id)).data.data ?? []
-    domains.value = (await domainApi.list(id)).data.data ?? []
-  } catch (e) {
-    notify.apiError(e)
-  } finally {
-    loading.value = false
-  }
-}
-watch(currentWorkspaceId, load, { immediate: true })
-
-function appName(id: number) {
-  return apps.value.find((a) => a.id === id)?.name ?? `#${id}`
-}
 
 // Config-sync status with the gateway (live = Goma is serving it; offline = a
 // host's domain isn't verified or the route is disabled). Not upstream health.
@@ -169,139 +40,67 @@ function statusLabel(r: Route): string {
   return s === 'live' ? 'live' : s === 'offline' ? 'offline' : s
 }
 
-function openCreate() {
+async function load(id: number | null) {
+  if (!id) { items.value = []; return }
+  loading.value = true
+  try {
+    items.value = (await routeApi.list(id)).data.data ?? []
+    apps.value = (await appApi.list(id)).data.data ?? []
+  } catch (e) {
+    notify.apiError(e)
+  } finally {
+    loading.value = false
+  }
+}
+watch(
+  currentWorkspaceId,
+  async (id) => {
+    await load(id)
+    openFromQuery()
+  },
+  { immediate: true },
+)
+
+// Deep link: /routes?app=<id>&new=1 opens the create form with that app already
+// chosen. The params are consumed once — left in the URL they would re-open the
+// form on every reload and on Back.
+function openFromQuery() {
+  if (route.query.new !== '1') return
+  const wanted = Number(route.query.app)
+  router.replace({ path: route.path })
+
+  if (!ws.canEdit || !apps.value.length) return
+  // An app id that isn't in this workspace usually means the workspace was
+  // switched between clicking and landing. Opening the form on some other app
+  // would be worse than not opening it.
+  if (Number.isFinite(wanted) && wanted > 0) {
+    if (!apps.value.some((a) => a.id === wanted)) {
+      notify.error('That application is not in this workspace.', 'Route not started')
+      return
+    }
+    openCreate(wanted)
+    return
+  }
+  openCreate()
+}
+
+function appName(id: number) {
+  return apps.value.find((a) => a.id === id)?.name ?? `#${id}`
+}
+
+function openCreate(appId?: number) {
   editing.value = null
-  form.value = emptyForm()
-  form.value.application_id = apps.value[0]?.id ?? null
-  loadAppPorts(form.value.application_id)
-  formMode.value = 'simple'
-  advancedConfig.value = ''
-  yamlError.value = ''
-  parseHostsToRows() // empty
-  if (!hostRows.value.length && domains.value.length) addHostRow()
+  presetAppId.value = appId ?? null
   showModal.value = true
 }
 function openEdit(r: Route) {
   editing.value = r
-  form.value = {
-    name: r.name, application_id: r.application_id, path: r.path,
-    hosts: (r.hosts || []).join(', '), methods: [...(r.methods || [])],
-    middlewares: [...(r.middlewares || [])], rewrite: r.rewrite || '', target_port: r.target_port || undefined,
-    tls_mode: r.tls_mode, certificate_id: r.certificate_id ?? null, enabled: r.enabled,
-  }
-  loadAppPorts(r.application_id)
-  yamlError.value = ''
-  parseHostsToRows()
-  if (r.advanced_config && r.advanced_config.trim()) {
-    formMode.value = 'advanced'
-    advancedConfig.value = r.advanced_config
-  } else {
-    formMode.value = 'simple'
-    advancedConfig.value = ''
-  }
+  presetAppId.value = null
   showModal.value = true
 }
-
-function splitCsv(s: string): string[] {
-  return s.split(',').map((x) => x.trim()).filter(Boolean)
-}
-
-// --- Guided host builder (domain dropdown + subdomain) ---
-
-// matchDomainName returns the most specific registered domain covering host.
-function matchDomainName(host: string): string | null {
-  const h = host.toLowerCase()
-  let best: string | null = null
-  for (const d of domains.value) {
-    const name = d.name.toLowerCase()
-    if (h === name || h.endsWith('.' + name)) {
-      if (!best || name.length > best.length) best = name
-    }
-  }
-  return best
-}
-
-// parseHostsToRows splits the canonical form.hosts string into builder rows; any
-// host not under a registered domain is preserved verbatim in extraHosts.
-function parseHostsToRows() {
-  const rows: { id: number; sub: string; domain: string }[] = []
-  const extra: string[] = []
-  for (const host of splitCsv(form.value.hosts)) {
-    const dom = matchDomainName(host)
-    if (!dom) { extra.push(host); continue }
-    const sub = host.toLowerCase() === dom ? '' : host.slice(0, host.length - dom.length - 1)
-    rows.push({ id: hostRowSeq++, sub, domain: dom })
-  }
-  hostRows.value = rows
-  extraHosts.value = extra
-}
-
-// syncHostsFromRows rebuilds form.hosts (the source of truth used by save + the
-// YAML view) from the builder rows. Empty subdomain → the domain's root.
-function syncHostsFromRows() {
-  const hosts: string[] = []
-  for (const r of hostRows.value) {
-    if (!r.domain) continue
-    const sub = r.sub.trim().replace(/^\.+|\.+$/g, '')
-    hosts.push(sub ? `${sub}.${r.domain}` : r.domain)
-  }
-  hosts.push(...extraHosts.value)
-  form.value.hosts = hosts.join(', ')
-}
-
-function addHostRow() {
-  hostRows.value.push({ id: hostRowSeq++, sub: '', domain: domains.value[0]?.name ?? '' })
-}
-function removeHostRow(i: number) { hostRows.value.splice(i, 1) }
-function removeExtraHost(i: number) { extraHosts.value.splice(i, 1) }
-
-// Keep form.hosts in lockstep with the builder. Rebuilding from rows is
-// idempotent, so the parse → build round-trip during open/switch is safe.
-watch([hostRows, extraHosts], syncHostsFromRows, { deep: true })
-
-async function save() {
-  if (!currentWorkspaceId.value || !form.value.application_id) return
-  let advanced = ''
-  if (formMode.value === 'advanced') {
-    try {
-      yamlToSimple(advancedConfig.value) // keep structured columns in sync
-      advanced = advancedConfig.value
-    } catch {
-      yamlError.value = 'Invalid YAML — fix it before saving.'
-      return
-    }
-  }
-  saving.value = true
-  try {
-    const input = {
-      name: form.value.name,
-      application_id: form.value.application_id,
-      path: form.value.path,
-      hosts: splitCsv(form.value.hosts),
-      methods: form.value.methods,
-      middlewares: form.value.middlewares,
-      rewrite: form.value.rewrite || '',
-      target_port: form.value.target_port || 0,
-      tls_mode: form.value.tls_mode,
-      advanced_config: advanced,
-      // Custom TLS uses a stored certificate.
-      certificate_id: form.value.tls_mode === 'custom' ? form.value.certificate_id : null,
-      enabled: form.value.enabled,
-    }
-    if (editing.value) {
-      await routeApi.update(currentWorkspaceId.value, editing.value.id, input)
-      notify.success('Route updated')
-    } else {
-      await routeApi.create(currentWorkspaceId.value, input)
-      notify.success('Route created')
-    }
-    showModal.value = false
-    load(currentWorkspaceId.value)
-  } catch (e) {
-    notify.apiError(e)
-  } finally {
-    saving.value = false
-  }
+function onSaved() {
+  showModal.value = false
+  load(currentWorkspaceId.value)
 }
 
 async function confirmRemove() {
@@ -327,7 +126,7 @@ async function confirmRemove() {
         <h1>Routes</h1>
         <p class="subtitle">Goma Gateway routes for your applications.</p>
       </div>
-      <button v-if="ws.canEdit" class="btn btn-primary" :disabled="apps.length === 0" @click="openCreate">
+      <button v-if="ws.canEdit" class="btn btn-primary" :disabled="apps.length === 0" @click="openCreate()">
         <span class="mdi mdi-plus"></span> New route
       </button>
     </div>
@@ -338,7 +137,7 @@ async function confirmRemove() {
         <span class="mdi mdi-routes" style="font-size: 44px; color: var(--text-muted)"></span>
         <h3>No routes</h3>
         <p>{{ apps.length === 0 ? 'Create an application first, then expose it with a route.' : 'Expose an application on a hostname and path.' }}</p>
-        <button v-if="ws.canEdit && apps.length" class="btn btn-primary mt-4" @click="openCreate">Create a route</button>
+        <button v-if="ws.canEdit && apps.length" class="btn btn-primary mt-4" @click="openCreate()">Create a route</button>
       </div>
       <div v-else class="table-wrapper">
         <table>
@@ -369,145 +168,15 @@ async function confirmRemove() {
       </div>
     </div>
 
-    <Teleport to="body">
-      <div v-if="showModal" class="modal-overlay" @click.self="showModal = false">
-        <div class="modal">
-          <div class="modal-header">
-            <h3>{{ editing ? 'Edit route' : 'New route' }}</h3>
-            <button class="btn-icon btn-icon-muted" aria-label="Close" @click="showModal = false"><span class="mdi mdi-close"></span></button>
-          </div>
-          <form @submit.prevent="save">
-            <div class="modal-body">
-              <div class="form-row">
-                <div class="form-group" style="flex: 1">
-                  <label class="form-label">Name</label>
-                  <input v-model="form.name" class="form-input" placeholder="e.g. web" pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?" title="Lowercase letters, digits and hyphens" required autofocus />
-                  <p class="form-hint">Lowercase letters, digits and hyphens (e.g. my-api).</p>
-                </div>
-                <div class="form-group" style="flex: 1">
-                  <label class="form-label">Application</label>
-                  <select v-model="form.application_id" class="form-select" required @change="onAppChange">
-                    <option v-for="a in apps" :key="a.id" :value="a.id">{{ a.name }}</option>
-                  </select>
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Target port <span class="text-muted">(optional — defaults to the app's port)</span></label>
-                <select v-if="appPorts.length" v-model="form.target_port" class="form-select">
-                  <option :value="undefined">App default port</option>
-                  <option v-for="p in appPorts" :key="p.id" :value="p.container_port">{{ p.container_port }}/{{ p.protocol }} · {{ p.scheme || 'http' }}{{ p.name ? ` — ${p.name}` : '' }}</option>
-                </select>
-                <input v-else v-model.number="form.target_port" type="number" class="form-input" placeholder="app port" />
-                <p v-if="selectedPortHttps" class="form-hint"><span class="mdi mdi-lock-outline"></span> Backend served over HTTPS; TLS verification is skipped for the internal address.</p>
-              </div>
-
-              <!-- Routing config: Simple / Advanced -->
-              <div class="mode-tabs">
-                <button type="button" :class="['mode-tab', { active: formMode === 'simple' }]" @click="switchMode('simple')">Simple</button>
-                <button type="button" :class="['mode-tab', { active: formMode === 'advanced' }]" @click="switchMode('advanced')">Advanced</button>
-              </div>
-
-              <template v-if="formMode === 'simple'">
-                <div class="form-group">
-                  <label class="form-label">Hosts</label>
-                  <template v-if="domains.length">
-                    <div v-for="(row, i) in hostRows" :key="row.id" class="host-row">
-                      <input v-model="row.sub" class="form-input host-sub" placeholder="subdomain (blank = root)" aria-label="Subdomain" />
-                      <span class="host-dot">.</span>
-                      <select v-model="row.domain" class="form-select host-domain" aria-label="Domain">
-                        <option v-for="d in domains" :key="d.id" :value="d.name">{{ d.name }}{{ d.verified ? '' : ' — unverified' }}</option>
-                      </select>
-                      <button type="button" class="btn-icon btn-icon-danger" title="Remove host" aria-label="Remove host" @click="removeHostRow(i)"><span class="mdi mdi-close"></span></button>
-                    </div>
-                    <div v-for="(h, i) in extraHosts" :key="'x' + i" class="host-row">
-                      <input :value="h" class="form-input mono" disabled title="Its domain is no longer registered" aria-label="Host" />
-                      <button type="button" class="btn-icon btn-icon-danger" title="Remove host" aria-label="Remove host" @click="removeExtraHost(i)"><span class="mdi mdi-close"></span></button>
-                    </div>
-                    <button type="button" class="btn btn-secondary btn-sm" @click="addHostRow"><span class="mdi mdi-plus"></span> Add host</button>
-                    <p v-if="!hostRows.length && !extraHosts.length" class="hint">No hosts — this route will match all hosts (catch-all).</p>
-                    <p v-else class="hint">Leave a subdomain blank to serve the domain at its root. Routes: <code>{{ form.hosts || '(catch-all)' }}</code></p>
-                  </template>
-                  <template v-else>
-                    <input v-model="form.hosts" class="form-input" placeholder="app.example.com" />
-                    <p class="hint">No domains registered. Enter a host manually, <router-link to="/domains">add a domain</router-link> to pick from a list, or leave blank to match all hosts.</p>
-                  </template>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Path</label>
-                  <input v-model="form.path" class="form-input" placeholder="/" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Methods <span class="text-muted">(blank = all)</span></label>
-                  <div class="methods-grid">
-                    <label v-for="m in allMethods" :key="m" class="method-chip" :class="{ active: form.methods.includes(m) }">
-                      <input type="checkbox" :value="m" v-model="form.methods" /> {{ m }}
-                    </label>
-                  </div>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">
-                    Rewrite <span class="text-muted">(optional)</span>
-                    <span
-                      class="mdi mdi-information-outline info-icon"
-                      :title="'Rewrites the request path before forwarding it to the app.\n\nExample:\n  path:    /api/v1\n  rewrite: /\n\nA request to /api/v1/users is forwarded as /users.'"
-                    ></span>
-                  </label>
-                  <input v-model="form.rewrite" class="form-input" placeholder="/new-prefix/" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Middlewares <span class="text-muted">({{ form.middlewares.length }} selected)</span></label>
-                  <div v-if="middlewares.length === 0" class="text-muted text-sm">No middlewares defined yet.</div>
-                  <div v-else class="middleware-select">
-                    <label v-for="m in middlewares" :key="m.id" class="middleware-option" :class="{ active: form.middlewares.includes(m.name) }">
-                      <input type="checkbox" :value="m.name" v-model="form.middlewares" />
-                      <span class="middleware-option-name">{{ m.name }}</span>
-                      <span class="badge badge-neutral middleware-option-type">{{ m.type }}</span>
-                    </label>
-                  </div>
-                </div>
-              </template>
-              <template v-else>
-                <div class="form-warning">
-                  <span class="mdi mdi-alert-outline"></span>
-                  <span>Enter advanced configuration at your own risk!</span>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Configuration (YAML)</label>
-                  <textarea v-model="advancedConfig" class="form-input yaml-editor" rows="14" spellcheck="false" placeholder="path: /&#10;hosts: []&#10;methods: []"></textarea>
-                  <p class="text-muted text-sm"><code>name</code> and <code>backends</code> are managed by Miabi; everything else (path, hosts, methods, middlewares, rewrite, cors, rateLimit, …) comes from here.</p>
-                </div>
-              </template>
-              <p v-if="yamlError" class="form-error">{{ yamlError }}</p>
-              <div class="form-group">
-                <label class="form-label">TLS</label>
-                <select v-model="form.tls_mode" class="form-select">
-                  <option value="acme">ACME (automatic)</option>
-                  <option value="custom">Custom certificate</option>
-                  <option value="none">None</option>
-                </select>
-              </div>
-              <div v-if="form.tls_mode === 'custom'" class="form-group">
-                <label class="form-label">Certificate</label>
-                <select v-model="form.certificate_id" class="form-select" required>
-                  <option :value="null" disabled>Select a stored certificate…</option>
-                  <option v-for="c in certificates" :key="c.id" :value="c.id">
-                    {{ c.name }} — {{ (c.dns_names || [c.common_name]).join(', ') }}
-                  </option>
-                </select>
-                <p class="form-hint">Pick a stored certificate, or <router-link to="/certificates">import one</router-link>.</p>
-              </div>
-              <label class="checkbox-label" style="margin-bottom: 0">
-                <input type="checkbox" v-model="form.enabled" /> Enabled
-              </label>
-            </div>
-            <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" @click="showModal = false">Cancel</button>
-              <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? 'Saving…' : (editing ? 'Save' : 'Create') }}</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </Teleport>
+    <RouteFormModal
+      :open="showModal"
+      :workspace-id="currentWorkspaceId"
+      :editing="editing"
+      :apps="apps"
+      :preset-app-id="presetAppId"
+      @close="showModal = false"
+      @saved="onSaved"
+    />
 
     <ConfirmDialog
       :open="!!toDelete"

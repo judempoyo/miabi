@@ -21,6 +21,7 @@ import LogViewer from '@/components/LogViewer.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import MetadataCard from '@/components/MetadataCard.vue'
 import EnvVarModal from '@/components/EnvVarModal.vue'
+import RouteFormModal from '@/components/RouteFormModal.vue'
 import AppAccessPanel from '@/components/AppAccessPanel.vue'
 import type { Application, AppOverview, Deployment, Release, AppEnvVar, Route, Network, Stack, Volume, StatsSample, Registry, GitRepository, AppEvent, AppPort, PortBinding, AppDatabase, ConnectionInfo, DeployStrategy, RestartPolicy, ImagePullPolicy, BuildMethod, HealthcheckType, ResourceLimits, LiveStatus, HostMountPreset, DatabaseInstance, LogicalDatabase, NodePlacement, PipelineDefinition } from '@/api/types'
 
@@ -306,6 +307,26 @@ const copiedEnvKey = ref('')
 const appRoutes = ref<Route[]>([])
 // Browser URL for a route host (https when TLS is on), so users can open the app
 // directly from the Routes tab.
+// Routes are created and edited in place: routing an app is something you decide
+// while looking at the app, so the same form the routes page uses opens here with
+// the application fixed.
+const showRouteModal = ref(false)
+const editingRoute = ref<Route | null>(null)
+function addRoute() {
+  editingRoute.value = null
+  showRouteModal.value = true
+}
+function editRoute(r: Route) {
+  // Generated external-access routes are managed from External Access.
+  if (r.generated) { router.push(`/routes/${r.id}`); return }
+  editingRoute.value = r
+  showRouteModal.value = true
+}
+async function onRouteSaved() {
+  showRouteModal.value = false
+  if (wid.value) appRoutes.value = (await routeApi.listByApp(wid.value, appId.value)).data.data ?? []
+}
+
 function routeUrl(r: Route, host: string): string {
   const scheme = r.tls_mode && r.tls_mode !== 'none' ? 'https' : 'http'
   const path = r.path && r.path !== '/' ? r.path : ''
@@ -2172,18 +2193,23 @@ async function detachDatabase(d: AppDatabase) {
     <div v-else-if="tab === 'routes'" class="card">
       <div class="card-header">
         <h2>Routes</h2>
-        <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">Manage routes</button>
+        <div class="flex items-center gap-2">
+          <button class="btn btn-ghost btn-sm" @click="router.push('/routes')">Manage routes</button>
+          <button v-if="ws.canEdit" class="btn btn-primary btn-sm" @click="addRoute">
+            <span class="mdi mdi-plus"></span> Add route
+          </button>
+        </div>
       </div>
       <div v-if="appRoutes.length === 0" class="empty-state">
         <span class="mdi mdi-routes" style="font-size: 36px; color: var(--text-muted)"></span>
         <p>No routes for this app.</p>
-        <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="router.push('/routes')">Add a route</button>
+        <button v-if="ws.canEdit" class="btn btn-primary mt-4" @click="addRoute">Add a route</button>
       </div>
       <div v-else class="table-wrapper">
         <table>
           <thead><tr><th>Route</th><th>Hosts</th><th>TLS</th><th class="text-right">Status</th></tr></thead>
           <tbody>
-            <tr v-for="r in appRoutes" :key="r.id" class="row-clickable" @click="router.push('/routes')">
+            <tr v-for="r in appRoutes" :key="r.id" class="row-clickable" @click="editRoute(r)">
               <td><span class="cell-title">{{ r.name }}</span><div class="cell-sub">{{ r.path }}</div></td>
               <td>
                 <template v-if="r.hosts && r.hosts.length">
@@ -2762,6 +2788,17 @@ async function detachDatabase(d: AppDatabase) {
 
     <!-- Delete application -->
     <Teleport to="body">
+      <RouteFormModal
+        :open="showRouteModal"
+        :workspace-id="wid"
+        :editing="editingRoute"
+        :apps="app ? [app] : []"
+        :preset-app-id="appId"
+        lock-app
+        @close="showRouteModal = false"
+        @saved="onRouteSaved"
+      />
+
       <EnvVarModal
         :open="showEnvModal"
         :editing-key="editingEnvKey"
