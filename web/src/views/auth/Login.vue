@@ -14,6 +14,7 @@ import { authApi } from '@/api/auth'
 import { oauthApi, authorizeUrl } from '@/api/oauth'
 import type { PublicProvider } from '@/api/types'
 import { pendingInvite } from '@/utils/pendingInvite'
+import { PasskeyCancelled, passkeysSupported } from '@/utils/webauthn'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -69,6 +70,9 @@ const ssoEmailInput = ref<HTMLInputElement | null>(null)
 const passwordResetEnabled = ref(false)
 // Sign-up is off by default, so the link only exists where an operator opened it.
 const registrationEnabled = ref(false)
+const passkeysEnabled = ref(false)
+const passkeyAvailable = computed(() => passkeysEnabled.value && passkeysSupported())
+const passkeyLoading = ref(false)
 const brand = ref<Brand>({})
 // Empty fields fall back to Miabi's own identity, so Community and an Enterprise
 // install that has set nothing look identical.
@@ -113,6 +117,7 @@ onMounted(async () => {
     const { data } = await authApi.status()
     passwordResetEnabled.value = data.data?.password_reset_enabled ?? false
     registrationEnabled.value = data.data?.registration_enabled ?? false
+    passkeysEnabled.value = data.data?.passkeys_enabled ?? false
     brand.value = data.data?.brand ?? {}
     brandStore.set(brand.value)
   } catch {
@@ -155,6 +160,23 @@ async function submitSSOTwoFactor() {
   } catch (e) {
     error.value = apiErrorMessage(e, t('login.invalidCode'))
     loading.value = false
+  }
+}
+
+async function signInWithPasskey() {
+  error.value = ''
+  passkeyLoading.value = true
+  try {
+    const result = await auth.loginWithPasskey()
+    if (result === 'reset') {
+      router.push({ name: 'change-password' })
+      return
+    }
+    router.push(pendingInvite() ? { name: 'accept-invitation' } : '/')
+  } catch (e) {
+    if (!(e instanceof PasskeyCancelled)) error.value = apiErrorMessage(e, t('login.passkeyFailed'))
+  } finally {
+    passkeyLoading.value = false
   }
 }
 
@@ -345,14 +367,24 @@ function providerIcon(type: string): string {
             </Transition>
           </div>
 
-          <button class="btn btn-primary auth-submit" :disabled="loading">
+          <button class="btn btn-primary auth-submit" :disabled="loading || passkeyLoading">
             <span v-if="loading" class="mdi mdi-loading mdi-spin"></span>
             {{ loading ? $t('login.signingIn') : $t('login.signIn') }}
           </button>
         </form>
 
-        <div v-if="step === 'credentials' && !ssoMode && (providers.length || ssoAvailable)" class="auth-oauth">
+        <div v-if="step === 'credentials' && !ssoMode && (providers.length || ssoAvailable || passkeyAvailable)" class="auth-oauth">
           <div class="auth-divider"><span>{{ $t('login.orContinueWith') }}</span></div>
+          <button
+            v-if="passkeyAvailable"
+            type="button"
+            class="btn btn-secondary oauth-btn"
+            :disabled="loading || passkeyLoading"
+            @click="signInWithPasskey"
+          >
+            <span class="mdi" :class="passkeyLoading ? 'mdi-loading mdi-spin' : 'mdi-fingerprint'"></span>
+            {{ passkeyLoading ? $t('login.waitingForPasskey') : $t('login.signInWithPasskey') }}
+          </button>
           <button
             v-for="p in providers"
             :key="p.name"

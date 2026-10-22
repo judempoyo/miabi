@@ -96,6 +96,14 @@ type Config struct {
 	TrustedProxies []string
 	AppWebURL      string
 	ApiBaseURL     string
+	// PasskeysEnabled is the kill switch for passkey sign-in (MIABI_PASSKEYS_ENABLED, default true). Off
+	// refuses passkey sign-in and enrolment but keeps stored passkeys, so turning it back on restores them.
+	PasskeysEnabled bool
+	// PasskeyRPID overrides the WebAuthn relying party id, which defaults to the host of the public URL.
+	// PasskeyOrigins lists extra origins allowed to use this server's passkeys. Passkeys are off
+	// without a public URL (MIABI_WEB_URL or MIABI_API_URL), since a passkey is bound to an origin.
+	PasskeyRPID    string
+	PasskeyOrigins []string
 	// LoginTokenTTLHours is the default lifetime of a CLI "login command" token
 	// (the OpenShift-style short-lived personal API token). LoginTokenMaxTTLHours
 	// is the hard ceiling a caller may request. Kept short by design.
@@ -625,6 +633,9 @@ func New() *Config {
 		TrustedProxies:        splitList(goutils.Env("MIABI_TRUSTED_PROXIES", "")),
 		AppWebURL:             goutils.Env("MIABI_WEB_URL", ""),
 		ApiBaseURL:            goutils.Env("MIABI_API_URL", ""),
+		PasskeysEnabled:       goutils.EnvBool("MIABI_PASSKEYS_ENABLED", true),
+		PasskeyRPID:           goutils.Env("MIABI_PASSKEY_RP_ID", ""),
+		PasskeyOrigins:        splitList(goutils.Env("MIABI_PASSKEY_ORIGINS", "")),
 		LoginTokenTTLHours:    goutils.EnvInt("MIABI_LOGIN_TOKEN_TTL_HOURS", 24),
 		LoginTokenMaxTTLHours: goutils.EnvInt("MIABI_LOGIN_TOKEN_MAX_TTL_HOURS", 168),
 		AppName:               goutils.Env("MIABI_APP_NAME", "Miabi"),

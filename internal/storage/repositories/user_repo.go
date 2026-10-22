@@ -193,6 +193,9 @@ func (r *UserRepository) Delete(id uint) error {
 	if err != nil {
 		logger.Warn("could not release the organizations owned by a deleted user", "user", id, "error", err)
 	}
+	if err := r.db.Where("user_id = ?", id).Delete(&models.Passkey{}).Error; err != nil {
+		logger.Warn("could not remove the passkeys of a deleted user", "user", id, "error", err)
+	}
 	return r.db.Delete(&models.User{}, id).Error
 }
 
