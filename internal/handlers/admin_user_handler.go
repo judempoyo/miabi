@@ -285,6 +285,7 @@ type AdminUserDetail struct {
 	OwnedWorkspaces  []WorkspaceSummary `json:"owned_workspaces"`
 	RecentEvents     []models.AuditLog  `json:"recent_events"`
 	OrganizationName string             `json:"organization_name,omitempty"`
+	Passkeys         int64              `json:"passkeys"`
 }
 
 // Get returns a single user with aggregate counts over the workspaces they own.
@@ -310,6 +311,7 @@ func (h *AdminUserHandler) Get(c *okapi.Context) error {
 		OwnedWorkspaces:  []WorkspaceSummary{},
 		RecentEvents:     []models.AuditLog{},
 	}
+	detail.Passkeys, _ = repositories.NewPasskeyRepository(h.db).Count(user.ID)
 	if h.orgs != nil {
 		if org, oerr := h.orgs.Get(h.orgs.HomeOrganization(user)); oerr == nil {
 			detail.OrganizationName = org.DisplayName
@@ -685,6 +687,28 @@ func (h *AdminUserHandler) DisableTwoFactor(c *okapi.Context) error {
 	h.db.Where("user_id = ?", target.ID).Delete(&models.TwoFactorRecoveryCode{})
 	h.record(c, "admin.user.2fa_disabled", target.ID, nil)
 	return message(c, "two-factor authentication disabled")
+}
+
+// ResetPasskeys removes every passkey of a user who lost the devices holding them, and ends their
+// sessions. They sign in with their password again and can register new passkeys.
+func (h *AdminUserHandler) ResetPasskeys(c *okapi.Context) error {
+	target, err := h.targetUser(c)
+	if err != nil {
+		return c.AbortNotFound("user not found")
+	}
+	if target.IsService() {
+		return c.AbortBadRequest(errServiceAccountManaged.Error())
+	}
+	removed, err := repositories.NewPasskeyRepository(h.db).DeleteAllForUser(target.ID)
+	if err != nil {
+		return c.AbortInternalServerError("failed to remove passkeys", err)
+	}
+	if removed == 0 {
+		return c.AbortBadRequest("this user has no passkeys")
+	}
+	h.revokeAll(c, target.ID)
+	h.record(c, "admin.user.passkeys_reset", target.ID, map[string]any{"passkeys_removed": removed})
+	return message(c, "passkeys removed")
 }
 
 // AdminResetPasswordResponse carries the freshly generated password, returned

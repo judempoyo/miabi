@@ -507,6 +507,22 @@ export interface AuthStatus {
   brand?: Brand
   /** Whether self-service sign-up is open AND usable. */
   registration_enabled: boolean
+  /** Passkeys are bound to the server's public URL; false when it isn't configured. */
+  passkeys_enabled: boolean
+}
+
+export interface Passkey {
+  id: number
+  name: string
+  /** Backed up by a password manager or platform, so it follows the user across devices. */
+  synced: boolean
+  last_used_at?: string
+  created_at: string
+}
+
+export interface PasskeyBegin {
+  token: string
+  options: { publicKey: Record<string, any> }
 }
 
 export interface RegisterInput {
@@ -643,6 +659,7 @@ export interface AdminUserDetail extends AdminUser {
   stacks: number
   owned_workspaces: WorkspaceSummary[]
   recent_events: AdminEvent[]
+  passkeys: number
 }
 
 export interface AdminWorkspace {

@@ -8,6 +8,7 @@ import { useNotificationStore } from '@/stores/notification'
 import { copyText } from '@/utils/clipboard'
 import type { TwoFactorSetup } from '@/api/types'
 import AppModal from '@/components/AppModal.vue'
+import PasskeysCard from '@/components/PasskeysCard.vue'
 
 const auth = useAuthStore()
 const { t } = useI18n()
@@ -234,6 +235,8 @@ function downloadCodes() {
         </template>
       </div>
     </div>
+
+    <PasskeysCard />
 
     <Teleport to="body">
       <!-- Setup: QR + verify -->

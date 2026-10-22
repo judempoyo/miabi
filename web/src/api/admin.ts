@@ -229,6 +229,9 @@ export const adminApi = {
     api.post<ApiResponse<{ message: string }>>(`/admin/users/${id}/revoke-sessions`),
   disableTwoFactor: (id: number) =>
     api.post<ApiResponse<{ message: string }>>(`/admin/users/${id}/disable-2fa`),
+  // Account recovery for a user who lost their passkey devices; also ends their sessions.
+  resetPasskeys: (id: number) =>
+    api.post<ApiResponse<{ message: string }>>(`/admin/users/${id}/reset-passkeys`),
   // Reset a user's password; the platform generates a new one and returns it once.
   resetUserPassword: (id: number) =>
     api.post<ApiResponse<{ password: string }>>(`/admin/users/${id}/reset-password`),

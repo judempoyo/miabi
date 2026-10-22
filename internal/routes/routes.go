@@ -98,6 +98,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/notify"
 	"github.com/miabi-io/miabi/internal/services/oauth"
 	"github.com/miabi-io/miabi/internal/services/organization"
+	"github.com/miabi-io/miabi/internal/services/passkey"
 	"github.com/miabi-io/miabi/internal/services/pipeline"
 	"github.com/miabi-io/miabi/internal/services/placement"
 	"github.com/miabi-io/miabi/internal/services/platformbackup"
@@ -1497,6 +1498,8 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	// "Copy login command": the auth handler mints via password re-auth; the OAuth
 	// handler mints via a forced fresh SSO login and hands off through Redis.
 	r.h.auth.SetLoginTokens(loginTokenService)
+	passkeyRepo := repositories.NewPasskeyRepository(db)
+	r.h.auth.SetPasskeys(newPasskeyService(cfg, redisClient, passkeyRepo), passkeyRepo)
 	r.h.oauthPublic.SetLoginTokens(loginTokenService)
 	r.h.adminUser.SetEnterprise(ee) // gate the per-user workspace-limit override
 
@@ -1981,4 +1984,24 @@ func registerUpdateCheck(cronManager *cronpkg.Manager, checker *updatecheck.Chec
 		time.Sleep(30 * time.Second)
 		check("initial update check")
 	}()
+}
+
+// newPasskeyService binds passkeys to the console's public URL; without one they stay off, since a
+// passkey is tied to an origin.
+func newPasskeyService(cfg *config.Config, rdb *redis.Client, repo *repositories.PasskeyRepository) *passkey.Service {
+	if !cfg.PasskeysEnabled {
+		logger.Info("passkeys disabled: MIABI_PASSKEYS_ENABLED=false")
+		return nil
+	}
+	pc, ok := passkey.ConfigFromWebURL(cfg.DeploymentURL(), cfg.PasskeyRPID, cfg.AppName, cfg.PasskeyOrigins)
+	if !ok {
+		logger.Info("passkeys disabled: MIABI_WEB_URL is not set")
+		return nil
+	}
+	svc, err := passkey.New(pc, rdb, repo)
+	if err != nil {
+		logger.Warn("passkeys disabled", "error", err)
+		return nil
+	}
+	return svc
 }

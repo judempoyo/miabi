@@ -159,6 +159,7 @@ func Run(db *gorm.DB) error {
 		&models.PasswordResetToken{},
 		&models.EmailVerificationToken{},
 		&models.TwoFactorRecoveryCode{},
+		&models.Passkey{},
 		&models.AuditLog{},
 		&models.Registry{},
 		&models.GitRepository{},
