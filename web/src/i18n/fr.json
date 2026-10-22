@@ -3791,6 +3791,13 @@
     }
   },
   "shellTerminal": {
+    "connectionFailed": "Connexion au terminal impossible. Vérifiez la session et la disponibilité du serveur, puis reconnectez-vous.",
+    "connectionTimeout": "Le serveur ne répond pas à la connexion WebSocket (15 s). Vérifiez le proxy, puis cliquez sur Reconnecter.",
+    "move": "Déplacer (flèches au clavier)",
+    "minimize": "Réduire",
+    "newSession": "Nouvelle session avec",
+    "reconnect": "Reconnecter",
+    "keyboardHint": "Tab : complétion · ↑ ↓ : historique · Maj+Tab : boutons · Bash conseillé si disponible",
     "compact": "Compact",
     "escGoesToTheShell": "Échap va au shell · Maj+Tab pour en sortir",
     "maximize": "Agrandir",
