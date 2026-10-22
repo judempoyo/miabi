@@ -122,15 +122,14 @@ func (h *AdminOrganizationHandler) Get(c *okapi.Context) error {
 
 type AdminCreateOrganizationRequest struct {
 	Body struct {
-		Name          string `json:"name" maxLength:"32"`
-		DisplayName   string `json:"display_name" required:"true" maxLength:"120"`
-		OwnerUserID   uint   `json:"owner_user_id"`
-		MaxWorkspaces *int   `json:"max_workspaces" min:"-1"`
-		// Per-user caps for this org's users; null inherits the platform default.
-		MaxWorkspacesPerUser           *int `json:"max_workspaces_per_user" min:"-1"`
-		MaxWorkspaceMembershipsPerUser *int `json:"max_workspace_memberships_per_user" min:"-1"`
-		// WorkspaceCreation is who may create workspaces; null inherits the platform setting.
-		WorkspaceCreation *string `json:"workspace_creation" enum:"anyone,except_invited,admins_only"`
+		Name                           string  `json:"name" maxLength:"32"`
+		DisplayName                    string  `json:"display_name" required:"true" maxLength:"120"`
+		OwnerUserID                    uint    `json:"owner_user_id"`
+		MaxWorkspaces                  *int    `json:"max_workspaces" min:"-1"`
+		MaxWorkspacesPerUser           *int    `json:"max_workspaces_per_user" min:"-1"`
+		MaxWorkspaceMembershipsPerUser *int    `json:"max_workspace_memberships_per_user" min:"-1"`
+		MaxWorkspacesPerOwner          *int    `json:"max_workspaces_per_owner" min:"-1"`
+		WorkspaceCreation              *string `json:"workspace_creation" enum:"anyone,except_invited,admins_only"`
 	} `json:"body"`
 }
 
@@ -139,6 +138,11 @@ type AdminCreateOrganizationRequest struct {
 func (h *AdminOrganizationHandler) Create(c *okapi.Context, req *AdminCreateOrganizationRequest) error {
 	if err := h.ee.RequireMutable(enterprise.FlagOrganizations); err != nil {
 		return entitlementAbort(c, err)
+	}
+	if req.Body.MaxWorkspacesPerOwner != nil {
+		if err := h.ee.RequireMutable(enterprise.FlagUserWorkspaceLimit); err != nil {
+			return entitlementAbort(c, err)
+		}
 	}
 	if req.Body.OwnerUserID != 0 {
 		if _, err := h.users.FindByID(req.Body.OwnerUserID); err != nil {
@@ -152,6 +156,7 @@ func (h *AdminOrganizationHandler) Create(c *okapi.Context, req *AdminCreateOrga
 		MaxWorkspaces:                  req.Body.MaxWorkspaces,
 		MaxWorkspacesPerUser:           req.Body.MaxWorkspacesPerUser,
 		MaxWorkspaceMembershipsPerUser: req.Body.MaxWorkspaceMembershipsPerUser,
+		MaxWorkspacesPerOwner:          req.Body.MaxWorkspacesPerOwner,
 		WorkspaceCreation:              req.Body.WorkspaceCreation,
 	})
 	if err != nil {
@@ -172,6 +177,11 @@ type AdminUpdateOrganizationRequest struct {
 		MaxWorkspaceMembershipsPerUser     *int  `json:"max_workspace_memberships_per_user" min:"-1"`
 		InheritWorkspacesPerUser           *bool `json:"inherit_workspaces_per_user"`
 		InheritWorkspaceMembershipsPerUser *bool `json:"inherit_workspace_memberships_per_user"`
+		// MaxWorkspacesPerOwner caps the org's owner instead of the per-user cap; -1 is unlimited.
+		// OwnerSameAsUsers clears it so the per-user cap applies to the owner again. Enterprise
+		// (user_workspace_limit).
+		MaxWorkspacesPerOwner *int  `json:"max_workspaces_per_owner" min:"-1"`
+		OwnerSameAsUsers      *bool `json:"owner_same_as_users"`
 		// WorkspaceCreation is who may create workspaces: anyone, except_invited, admins_only, or
 		// inherit to fall back to the platform setting. Null leaves it as it is.
 		WorkspaceCreation *string `json:"workspace_creation" enum:"anyone,except_invited,admins_only,inherit"`
@@ -195,11 +205,20 @@ func (h *AdminOrganizationHandler) Update(c *okapi.Context, req *AdminUpdateOrga
 			return entitlementAbort(c, err)
 		}
 	}
+	if touchesOwnerLimit(req) {
+		if err := h.ee.RequireMutable(enterprise.FlagUserWorkspaceLimit); err != nil {
+			return entitlementAbort(c, err)
+		}
+	}
 	in := organization.UpdateInput{
 		DisplayName: req.Body.DisplayName, OwnerUserID: req.Body.OwnerUserID,
 		MaxWorkspaces:                  req.Body.MaxWorkspaces,
 		MaxWorkspacesPerUser:           req.Body.MaxWorkspacesPerUser,
 		MaxWorkspaceMembershipsPerUser: req.Body.MaxWorkspaceMembershipsPerUser,
+		MaxWorkspacesPerOwner:          req.Body.MaxWorkspacesPerOwner,
+	}
+	if req.Body.OwnerSameAsUsers != nil {
+		in.SameAsUsersForOwner = *req.Body.OwnerSameAsUsers
 	}
 	if req.Body.WorkspaceCreation != nil {
 		if *req.Body.WorkspaceCreation == "inherit" {
@@ -276,7 +295,12 @@ func touchesOrgLimits(req *AdminUpdateOrganizationRequest) bool {
 		req.Body.MaxWorkspaceMembershipsPerUser != nil ||
 		req.Body.InheritWorkspacesPerUser != nil ||
 		req.Body.InheritWorkspaceMembershipsPerUser != nil ||
-		req.Body.WorkspaceCreation != nil
+		req.Body.WorkspaceCreation != nil ||
+		touchesOwnerLimit(req)
+}
+
+func touchesOwnerLimit(req *AdminUpdateOrganizationRequest) bool {
+	return req.Body.MaxWorkspacesPerOwner != nil || req.Body.OwnerSameAsUsers != nil
 }
 
 // limitChanges records which caps an update moved, and from what. "Who lowered this limit" is the
@@ -291,6 +315,9 @@ func limitChanges(before, after *models.Organization) map[string]any {
 	}
 	if !samePtr(before.MaxWorkspaceMembershipsPerUser, after.MaxWorkspaceMembershipsPerUser) {
 		out["max_workspace_memberships_per_user"] = []any{before.MaxWorkspaceMembershipsPerUser, after.MaxWorkspaceMembershipsPerUser}
+	}
+	if !samePtr(before.MaxWorkspacesPerOwner, after.MaxWorkspacesPerOwner) {
+		out["max_workspaces_per_owner"] = []any{before.MaxWorkspacesPerOwner, after.MaxWorkspacesPerOwner}
 	}
 	if !sameStrPtr(before.WorkspaceCreation, after.WorkspaceCreation) {
 		out["workspace_creation"] = []any{before.WorkspaceCreation, after.WorkspaceCreation}

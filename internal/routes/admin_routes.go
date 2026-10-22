@@ -188,6 +188,15 @@ func (r *Router) adminRoutes() []okapi.RouteDefinition {
 		},
 		{
 			Method:      http.MethodPost,
+			Path:        "/users/{id}/reset-passkeys",
+			Group:       g,
+			Middlewares: admin,
+			Handler:     r.h.adminUser.ResetPasskeys,
+			Summary:     "Remove all of a user's passkeys and end their sessions",
+			Response:    &dto.Response[dto.MessageData]{},
+		},
+		{
+			Method:      http.MethodPost,
 			Path:        "/users/{id}/reset-password",
 			Group:       g,
 			Middlewares: admin,

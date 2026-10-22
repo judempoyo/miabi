@@ -180,6 +180,29 @@ function revoke() {
   }
 }
 
+function resetPasskeys() {
+  if (!user.value) return
+  const id = user.value.id
+  confirmAction.value = {
+    title: 'Reset passkeys?',
+    message: `Remove all ${user.value.passkeys} passkey(s) of ${user.value.name} and sign them out everywhere? Use this when they lost the devices holding them; they sign in with their password and can add new ones.`,
+    confirmLabel: 'Reset passkeys',
+    variant: 'danger',
+    run: async () => {
+      busy.value = true
+      try {
+        await adminApi.resetPasskeys(id)
+        notify.success('Passkeys removed')
+        load()
+      } catch (e) {
+        notify.apiError(e)
+      } finally {
+        busy.value = false
+      }
+    },
+  }
+}
+
 function disableTwoFactor() {
   if (!user.value) return
   const id = user.value.id
@@ -434,6 +457,9 @@ function eventSeverity(e: AdminEvent): string {
           </button>
           <button v-if="user.two_factor_enabled && !isService" class="btn btn-secondary btn-sm" :disabled="busy" @click="disableTwoFactor">
             <span class="mdi mdi-shield-off-outline"></span> Disable 2FA
+          </button>
+          <button v-if="user.passkeys > 0 && !isService" class="btn btn-secondary btn-sm" :disabled="busy" @click="resetPasskeys">
+            <span class="mdi mdi-fingerprint-off"></span> Reset passkeys
           </button>
           <button v-if="!isService" class="btn btn-secondary btn-sm" :disabled="busy" @click="resetPassword" title="Generate a new password for this user (irreversible)">
             <span class="mdi mdi-lock-reset"></span> Reset password

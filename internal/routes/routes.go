@@ -98,6 +98,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/notify"
 	"github.com/miabi-io/miabi/internal/services/oauth"
 	"github.com/miabi-io/miabi/internal/services/organization"
+	"github.com/miabi-io/miabi/internal/services/passkey"
 	"github.com/miabi-io/miabi/internal/services/pipeline"
 	"github.com/miabi-io/miabi/internal/services/placement"
 	"github.com/miabi-io/miabi/internal/services/platformbackup"
@@ -1076,6 +1077,28 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	// Mirrors the route serve gate: a privileged workspace may hold a cert for a domain it has not
 	// verified, because it is allowed to serve one.
 	certificateService.SetWorkspacePrivilege(workspaceRepo)
+	// A cluster may serve its generated URLs from one certificate in the system workspace, usually a wildcard.
+	certificateService.SetSystemWorkspace(workspaceRepo)
+	clusterService.SetExternalCertificates(certificateService)
+	routeService.SetExternalCertificates(clusterService)
+	certificateService.SetClusterRefs(func(certID uint) ([]string, error) {
+		list, err := clusterRepo.ListByExternalCertificate(certID)
+		names := make([]string, 0, len(list))
+		for _, c := range list {
+			names = append(names, c.Name)
+		}
+		return names, err
+	})
+	certificateService.SetOnChange(func(cert *models.Certificate) {
+		list, err := clusterRepo.ListByExternalCertificate(cert.ID)
+		if err != nil {
+			logger.Warn("re-rendering generated URLs after a certificate change failed", "certificate", cert.ID, "error", err)
+			return
+		}
+		for _, c := range list {
+			clusterService.ResyncRoutes(context.Background(), c.ID)
+		}
+	})
 	// Declarative apply engine (shared by the one-shot apply API and GitOps).
 	applyService := apply.NewService(appService, storageService, databaseService, stackService, secretService, routeService, domainService, registryService)
 	applyService.SetUnsealer(sealingService)
@@ -1497,6 +1520,8 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	// "Copy login command": the auth handler mints via password re-auth; the OAuth
 	// handler mints via a forced fresh SSO login and hands off through Redis.
 	r.h.auth.SetLoginTokens(loginTokenService)
+	passkeyRepo := repositories.NewPasskeyRepository(db)
+	r.h.auth.SetPasskeys(newPasskeyService(cfg, redisClient, passkeyRepo), passkeyRepo)
 	r.h.oauthPublic.SetLoginTokens(loginTokenService)
 	r.h.adminUser.SetEnterprise(ee) // gate the per-user workspace-limit override
 
@@ -1554,6 +1579,7 @@ func InitRoutes(app *okapi.Okapi, db *gorm.DB, redisClient *redis.Client, cfg *c
 	r.h.adminMetrics.SetNodeCapacity(serverRepo)
 	r.h.cluster.SetCapacityStore(serverRepo)
 	r.h.cluster.SetOrganizations(organizationService, ee)
+	r.h.cluster.SetSystemCertificates(certificateService)
 	r.h.adminUser.SetOrganizations(organizationService)
 	r.h.adminWorkspace.SetOrganizations(organizationService, organizationService.OwnsClusters)
 	r.h.node.SetNodeStats(nodeStatsService)
@@ -1981,4 +2007,24 @@ func registerUpdateCheck(cronManager *cronpkg.Manager, checker *updatecheck.Chec
 		time.Sleep(30 * time.Second)
 		check("initial update check")
 	}()
+}
+
+// newPasskeyService binds passkeys to the console's public URL; without one they stay off, since a
+// passkey is tied to an origin.
+func newPasskeyService(cfg *config.Config, rdb *redis.Client, repo *repositories.PasskeyRepository) *passkey.Service {
+	if !cfg.PasskeysEnabled {
+		logger.Info("passkeys disabled: MIABI_PASSKEYS_ENABLED=false")
+		return nil
+	}
+	pc, ok := passkey.ConfigFromWebURL(cfg.DeploymentURL(), cfg.PasskeyRPID, cfg.AppName, cfg.PasskeyOrigins)
+	if !ok {
+		logger.Info("passkeys disabled: MIABI_WEB_URL is not set")
+		return nil
+	}
+	svc, err := passkey.New(pc, rdb, repo)
+	if err != nil {
+		logger.Warn("passkeys disabled", "error", err)
+		return nil
+	}
+	return svc
 }

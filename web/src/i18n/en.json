@@ -2103,7 +2103,10 @@
     "useADifferentAccount": "Use a different account",
     "verify": "Verify",
     "verifying": "Verifying…",
-    "workEmail": "Work email"
+    "workEmail": "Work email",
+    "passkeyFailed": "Could not sign in with a passkey.",
+    "signInWithPasskey": "Sign in with a passkey",
+    "waitingForPasskey": "Waiting for your passkey…"
   },
   "marketplace": {
     "applications": "Applications",
@@ -3758,6 +3761,39 @@
         "deleteTitle": "Remove the admin access rule?",
         "deleteMessage": "The console falls back to Community behaviour: the unlock applies only when MIABI_ADMIN_UNLOCK=true."
       }
+    },
+    "passkeys": {
+      "title": "Passkeys",
+      "hint": "Sign in with your fingerprint, face or device PIN instead of a password. A passkey can't be phished or reused, counts as both factors, and your password stays as a fallback.",
+      "notConfigured": "Passkeys are off on this server. They need MIABI_PASSKEYS_ENABLED (on by default) and a public URL in MIABI_WEB_URL; change them and restart.",
+      "unsupported": "This browser doesn't support passkeys. Your existing passkeys still work on devices that do.",
+      "ssoAccount": "Your account signs in through single sign-on, so passkeys are managed by your identity provider.",
+      "empty": "No passkeys yet.",
+      "synced": "Synced",
+      "syncedHint": "Backed up by your password manager or device, so it follows you across devices",
+      "addedOn": "Added {date}",
+      "lastUsed": "last used {date}",
+      "neverUsed": "never used",
+      "add": "Add a passkey",
+      "rename": "Rename",
+      "remove": "Remove",
+      "addTitle": "Add a passkey",
+      "renameTitle": "Rename passkey",
+      "removeTitle": "Remove passkey",
+      "addIntro": "Confirm your password, then follow your browser's prompt to create the passkey.",
+      "addIntroTwoFactor": "Confirm your password and a two-factor code, then follow your browser's prompt to create the passkey.",
+      "removeIntro": "“{name}” will no longer sign you in. Also delete it from your device or password manager.",
+      "name": "Name",
+      "namePlaceholder": "e.g. Work laptop",
+      "nameHint": "Helps you tell your passkeys apart.",
+      "addSubmit": "Continue",
+      "renameSubmit": "Save",
+      "removeSubmit": "Remove",
+      "working": "Working…",
+      "cancelled": "The passkey prompt was closed before it finished.",
+      "added": "Passkey “{name}” added",
+      "removed": "Passkey removed",
+      "loadFailed": "Could not load your passkeys"
     }
   },
   "shell": {

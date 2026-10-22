@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, AuthResponse } from '@/api/types'
+import { getPasskey } from '@/utils/webauthn'
 
 export const useAuthStore = defineStore('auth', () => {
   // The JWT lives only in an HttpOnly cookie set by the server, so it is never
@@ -41,6 +42,21 @@ export const useAuthStore = defineStore('auth', () => {
     if (!data?.user) {
       throw new Error('Login failed: unexpected server response')
     }
+    setAuth(data)
+    return 'ok'
+  }
+
+  // Passwordless sign-in: the browser offers whichever of this server's passkeys it holds. A passkey
+  // is both factors, so there is no 'twofactor' step.
+  async function loginWithPasskey(): Promise<'ok' | 'reset'> {
+    const begin = (await authApi.passkeyLoginBegin()).data.data
+    const credential = await getPasskey(begin.options.publicKey)
+    const data = (await authApi.passkeyLogin(begin.token, credential)).data.data
+    if (data?.must_change_password && data.reset_token) {
+      pendingReset.value = data.reset_token
+      return 'reset'
+    }
+    if (!data?.user) throw new Error('Login failed: unexpected server response')
     setAuth(data)
     return 'ok'
   }
@@ -112,5 +128,5 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem('mb_user', JSON.stringify(res.data.data))
   }
 
-  return { user, isAuthenticated, isAdmin, canCreateWorkspace, pendingReset, login, completeReset, cancelReset, logout, clearSession, fetchUser, setUser, updateName, updateProfile, dismissOnboarding }
+  return { user, isAuthenticated, isAdmin, canCreateWorkspace, pendingReset, login, loginWithPasskey, completeReset, cancelReset, logout, clearSession, fetchUser, setUser, updateName, updateProfile, dismissOnboarding }
 })

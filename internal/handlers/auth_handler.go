@@ -39,6 +39,7 @@ import (
 	"github.com/miabi-io/miabi/internal/services/directory"
 	"github.com/miabi-io/miabi/internal/services/logintoken"
 	"github.com/miabi-io/miabi/internal/services/mailer"
+	"github.com/miabi-io/miabi/internal/services/passkey"
 	"github.com/miabi-io/miabi/internal/services/registration"
 	"github.com/miabi-io/miabi/internal/services/settings"
 	"github.com/miabi-io/miabi/internal/services/twofactor"
@@ -80,6 +81,9 @@ type AuthHandler struct {
 	// loginTokens mints the short-lived personal API token behind the "Copy login
 	// command" flow. Set by SetLoginTokens; nil disables the endpoint.
 	loginTokens *logintoken.Service
+	// passkeys is nil when the server has no public URL to bind them to. Set by SetPasskeys.
+	passkeys    *passkey.Service
+	passkeyRepo *repositories.PasskeyRepository
 }
 
 // SetLoginTokens wires the CLI login-token issuer (the "Copy login command"
@@ -330,6 +334,8 @@ type AuthStatus struct {
 	// account" link. False also when sign-up is on but unusable — see
 	// registration.Available.
 	RegistrationEnabled bool `json:"registration_enabled"`
+	// PasskeysEnabled tells the sign-in page whether to offer passkey sign-in.
+	PasskeysEnabled bool `json:"passkeys_enabled"`
 }
 
 func profileOf(u *models.User) UserProfile {
@@ -361,7 +367,7 @@ func authSourceLabel(src string) string {
 // closed — the platform admin is seeded at install; accounts are created by an
 // admin from the Users page.
 func (h *AuthHandler) Status(c *okapi.Context) error {
-	st := AuthStatus{PasswordResetEnabled: h.passwordResetEnabled}
+	st := AuthStatus{PasswordResetEnabled: h.passwordResetEnabled, PasskeysEnabled: h.passkeys.Enabled()}
 	if h.registration != nil {
 		st.RegistrationEnabled = h.registration.Available() == nil
 	}

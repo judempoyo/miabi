@@ -1,5 +1,5 @@
 import api from './client'
-import type { ApiResponse, AuthResponse, AuthStatus, InvitationPreview, RegisterFromInvitationResult, RegisterInput, RegisterResult, LoginTokenResponse, RecoveryCodes, Session, TwoFactorSetup, User, UserPreferences, UserPreferencesInput } from './types'
+import type { ApiResponse, AuthResponse, AuthStatus, Passkey, PasskeyBegin, InvitationPreview, RegisterFromInvitationResult, RegisterInput, RegisterResult, LoginTokenResponse, RecoveryCodes, Session, TwoFactorSetup, User, UserPreferences, UserPreferencesInput } from './types'
 
 export const authApi = {
   // Advertises which auth features are enabled (e.g. self-service password
@@ -121,5 +121,32 @@ export const authApi = {
   },
   regenerateRecoveryCodes(code: string) {
     return api.post<ApiResponse<RecoveryCodes>>('/auth/2fa/recovery-codes', { code })
+  },
+
+  // --- Passkeys (WebAuthn) ---
+  passkeyLoginBegin() {
+    return api.post<ApiResponse<PasskeyBegin>>('/auth/passkey/login/begin')
+  },
+  passkeyLogin(token: string, credential: unknown) {
+    return api.post<ApiResponse<AuthResponse>>('/auth/passkey/login', { token, credential })
+  },
+  listPasskeys() {
+    return api.get<ApiResponse<Passkey[]>>('/auth/passkeys')
+  },
+  // two_factor_code is required when the account has 2FA on.
+  passkeyRegisterBegin(password: string, twoFactorCode?: string) {
+    return api.post<ApiResponse<PasskeyBegin>>('/auth/passkeys/register/begin', {
+      password,
+      two_factor_code: twoFactorCode || undefined,
+    })
+  },
+  passkeyRegister(token: string, name: string, credential: unknown) {
+    return api.post<ApiResponse<Passkey>>('/auth/passkeys', { token, name, credential })
+  },
+  renamePasskey(id: number, name: string) {
+    return api.patch<ApiResponse<{ message: string }>>(`/auth/passkeys/${id}`, { name })
+  },
+  removePasskey(id: number, password: string) {
+    return api.delete<ApiResponse<{ message: string }>>(`/auth/passkeys/${id}`, { data: { password } })
   },
 }

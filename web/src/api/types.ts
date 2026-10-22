@@ -507,6 +507,22 @@ export interface AuthStatus {
   brand?: Brand
   /** Whether self-service sign-up is open AND usable. */
   registration_enabled: boolean
+  /** Passkeys are bound to the server's public URL; false when it isn't configured. */
+  passkeys_enabled: boolean
+}
+
+export interface Passkey {
+  id: number
+  name: string
+  /** Backed up by a password manager or platform, so it follows the user across devices. */
+  synced: boolean
+  last_used_at?: string
+  created_at: string
+}
+
+export interface PasskeyBegin {
+  token: string
+  options: { publicKey: Record<string, any> }
 }
 
 export interface RegisterInput {
@@ -566,6 +582,8 @@ export interface Organization {
   /** Per-user caps for this org's users; null inherits the platform default. -1 = unlimited, 0 = none. */
   max_workspaces_per_user?: number | null
   max_workspace_memberships_per_user?: number | null
+  /** Replaces the per-user owned cap for the org's owner; null applies the per-user cap to them too. */
+  max_workspaces_per_owner?: number | null
   /** The location this organization's new workspaces land in; null = the platform default. */
   default_cluster_id?: number | null
   /** Who among the org's users may create workspaces; null inherits the platform setting. */
@@ -603,6 +621,9 @@ export interface OrganizationUpdate {
   max_workspace_memberships_per_user?: number
   inherit_workspaces_per_user?: boolean
   inherit_workspace_memberships_per_user?: boolean
+  /** Owner cap (Enterprise): -1 unlimited. owner_same_as_users clears it back to the per-user cap. */
+  max_workspaces_per_owner?: number
+  owner_same_as_users?: boolean
   /** 'inherit' falls back to the platform setting; omitting the field leaves it unchanged. */
   workspace_creation?: WorkspaceCreationMode | 'inherit'
   /** 0 clears the default location; omitting the field leaves it unchanged. */
@@ -643,6 +664,7 @@ export interface AdminUserDetail extends AdminUser {
   stacks: number
   owned_workspaces: WorkspaceSummary[]
   recent_events: AdminEvent[]
+  passkeys: number
 }
 
 export interface AdminWorkspace {
@@ -2623,6 +2645,9 @@ export interface Cluster {
   legacy_ingress: boolean
   external_base_domain?: string
   external_cert_provider?: string
+  /** A system-workspace certificate serving every generated URL here; absent means one certificate per app. */
+  external_certificate_id?: number
+  external_certificate?: ExternalCertificateInfo
   external_domain_pinned?: boolean
   external_provider_pinned?: boolean
   external_apps?: number
@@ -3562,4 +3587,25 @@ export interface ElevationState {
   locked_until?: string
   ttl_seconds: number
   idle_seconds: number
+}
+
+/** The certificate serving a cluster's generated URLs. Unusable means the gateway falls back to one per app. */
+export interface ExternalCertificateInfo {
+  name: string
+  dns_names: string[]
+  not_after: string
+  usable: boolean
+  problem?: string
+}
+
+/** A system-workspace certificate offered for a cluster's generated URLs; problem says why it can't serve them. */
+export interface ExternalCertificateOption {
+  id: number
+  name: string
+  display_name?: string
+  dns_names: string[]
+  source: string
+  status: string
+  not_after: string
+  problem?: string
 }
